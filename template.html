@@ -255,7 +255,7 @@ function bestPlays(min) {
   return out.sort((a, b) => b.rate - a.rate || b.p - a.p);
 }
 
-const TABS = [["top", "Top plays"], ["matchup", "Matchups"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How tested"]];
+const TABS = [["top", "Top plays"], ["matchup", "Matchups"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How it works"]];
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${l}</button>`).join("");
 }
@@ -273,9 +273,9 @@ function viewTop() {
   const days = Object.keys(byDay).sort((a, b) => kickTime(gameOf(byDay[a][0].pl.team).kickoff) - kickTime(gameOf(byDay[b][0].pl.team).kickoff));
   return `<div class="stack">
     <div><h2>Week ${DATA.week} top plays</h2>
-    <p class="hint">Each card is the highest milestone for that player and stat that cleared the bar in testing. The big number is how often players in that model tier actually got there in seasons the model never trained on. It isn't the model's raw output. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
+    <p class="hint">Each card is the highest milestone for that player and stat at this level. The big number is the player's chance this week: across past seasons, that's how often players in the same spot (same role, volume and matchup strength) actually hit it. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
     <div class="filters">${seg("min", [[PERFECT, "100% so far"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
-    ${state.min === PERFECT ? `<p class="hint">100% so far: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) that also tested at ${pct(PERFECT_MIN_RATE)} or better. The big number is the player's record, like 7/7. Under it is the tested rate: how often players in that model tier actually got there, which is the better guide to the real chance. No milestone tests at 100%.</p>` : ""}
+    ${state.min === PERFECT ? `<p class="hint">100% so far: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) with a chance this week of ${pct(PERFECT_MIN_RATE)} or better. The big number is the player's record, like 7/7. Under it is the player's chance this week, which is the better guide: even a perfect start misses sometimes, and no play is ever a sure thing.</p>` : ""}
     ${days.length ? days.map((d) => `<div class="day"><h3>${esc(d)}</h3></div><div class="cards">${byDay[d].map(card).join("")}</div>`).join("")
       : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
   </div>`;
@@ -287,14 +287,14 @@ function card(x) {
     <div class="name">${esc(p.player)}</div>
     ${state.min === PERFECT ? (() => { const h = history(p, m.stat, x.line);
       return `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${h.hits}/${h.games}</span></div>
-    <div class="mu">Cleared every game so far · tested rate <b>${pct(x.rate)}</b></div>`; })()
+    <div class="mu">Hit in all ${h.games} games this season · chance this week <b>${pct(x.rate)}</b></div>`; })()
       : `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${pct(x.rate)}</span></div>`}
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
     ${state.min === PERFECT ? "" : histLine(p, m, x.line)}
     ${muLine(p, m)}
     ${scheduleLine(p, m)}
     ${roleLine(p, x.mk)}
-    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}tier tested on ${t.n} games</div>
+    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}chance based on ${t.n.toLocaleString()} past games like this</div>
     ${splitLine(p, m, g)}
     ${gameLog(p, x.mk)}
   </div>`;
@@ -385,7 +385,7 @@ function viewStats() {
   const shown = state.all ? rows : rows.slice(0, 40);
   const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Chance this week for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
@@ -407,19 +407,19 @@ function viewResults() {
   const all = DATA.results, graded = all.filter((e) => e.hit != null);
   const pending = all.filter((e) => !("actual" in e)).length, voids = all.filter((e) => "actual" in e && e.hit == null).length;
   const row = (label, list) => { const s = summary(list); return `<tr><td class="t">${label}</td><td>${s.n}</td><td>${s.hits}</td><td class="r">${pct(s.rate)}</td><td>${pct(s.exp)}</td></tr>`; };
-  const head = `<thead><tr><th class="t"></th><th>Graded</th><th>Hits</th><th>Hit rate</th><th>Tested</th></tr></thead>`;
+  const head = `<thead><tr><th class="t"></th><th>Graded</th><th>Hits</th><th>Hit rate</th><th>Expected</th></tr></thead>`;
   const weeks = [...new Set(graded.map((e) => e.season * 100 + e.week))].sort((a, b) => b - a);
   const top = graded.filter((e) => e.rate >= 0.7).sort((a, b) => b.week - a.week || b.rate - a.rate);
   return `<div class="stack">
-    <div><h2>Results</h2><p class="hint">Every play at a tested rate of 50% or more is recorded before kickoff and graded once the box score posts. "Tested" is the rate those plays were expected to hit. Players who don't take an offensive snap are voided. Tracking started with Week ${Math.min(...all.map((e) => e.week)) || DATA.week} of ${DATA.season}, so early weeks are a small sample.</p></div>
+    <div><h2>Results</h2><p class="hint">Every play with a chance of 50% or more is recorded before kickoff and graded once the box score posts. "Expected" is the average chance those plays were given, so you can see if they hit as often as promised. Players who don't take an offensive snap are voided. Tracking started with Week ${Math.min(...all.map((e) => e.week)) || DATA.week} of ${DATA.season}, so early weeks are a small sample.</p></div>
     <p class="count">${graded.length} graded · ${pending} waiting on games or box scores · ${voids} void</p>
     <div class="grid2">
-      <div class="panel"><h3>By tested rate</h3><table class="data">${head}<tbody>${BUCKETS.map(([lo, hi, l]) => row(l, graded.filter((e) => e.rate >= lo && e.rate < hi))).join("")}${row("All", graded)}</tbody></table></div>
+      <div class="panel"><h3>By chance given</h3><table class="data">${head}<tbody>${BUCKETS.map(([lo, hi, l]) => row(l, graded.filter((e) => e.rate >= lo && e.rate < hi))).join("")}${row("All", graded)}</tbody></table></div>
       <div class="panel"><h3>By stat</h3><table class="data">${head}<tbody>${Object.entries(MARKETS).map(([k, m]) => row(m.label, graded.filter((e) => e.market === k))).join("")}</tbody></table></div>
       <div class="panel"><h3>By week</h3><table class="data">${head}<tbody>${weeks.map((w) => row(`Week ${w % 100}`, graded.filter((e) => e.season * 100 + e.week === w))).join("") || '<tr><td class="t" colspan="5">No graded games yet.</td></tr>'}</tbody></table></div>
     </div>
-    <h3>Graded 70%+ plays</h3>
-    <div class="tablebox"><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Player</th><th class="t">Milestone</th><th>Tested</th><th>Actual</th><th class="t">Result</th></tr></thead><tbody>
+    <h3>Graded plays with a 70%+ chance</h3>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Player</th><th class="t">Milestone</th><th>Chance</th><th>Actual</th><th class="t">Result</th></tr></thead><tbody>
     ${top.map((e) => `<tr><td class="t">${e.week}</td><td class="t who">${esc(e.player)} <span class="count">${esc(e.team)}</span></td><td class="t">${mileLabel(e.market, e.line)}</td><td>${pct(e.rate)}</td><td>${num(e.actual, 0)}</td><td class="t ${e.hit ? "hit" : "miss"}">${e.hit ? "Hit" : "Miss"}</td></tr>`).join("") || '<tr><td class="t" colspan="6">None graded yet.</td></tr>'}
     </tbody></table></div>
   </div>`;
@@ -469,7 +469,7 @@ function bestOf(p) {
 function mCell(p, mk) {
   const m = MARKETS[mk];
   if (!p.plays[`${mk}|${Object.keys(m.lines)[0]}`]) return `<td class="count">–</td>`;
-  if (mk === "td") { const r = p.plays["td|1"].rate; return `<td class="r ${r >= 0.5 ? "h3" : ""}">${pct(r)}<span class="hh">tested</span></td>`; }
+  if (mk === "td") { const r = p.plays["td|1"].rate; return `<td class="r ${r >= 0.5 ? "h3" : ""}">${pct(r)}<span class="hh">chance</span></td>`; }
   return `<td><b>${num(p.proj[mk])}</b><span class="hh">avg ${num(p.x[m.stat + "_g"] ?? p.x["prev_" + m.stat])}</span></td>`;
 }
 function teamPanel(team, opp) {
@@ -496,7 +496,7 @@ function viewMatchup() {
   const g = games.find((x) => x.team === state.mgame) || games.find((x) => !started(x.team)) || games[0];
   const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
   return `<div class="stack">
-    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the tested chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the player's highest tested milestone this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
+    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
     <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
     <span class="count">${where}</span></div>
     <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
@@ -519,9 +519,9 @@ function viewDefense() {
 
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, receptions, rush + rec, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
+    <div><h2>How it works</h2><p class="hint">Every percentage on the board is a player's chance this week. Here's how it's worked out and checked. One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, receptions, rush + rec, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
     <ul class="notes">
-      <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
+      <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So each chance on the board is the real hit rate of past players the model scored the same way, not the model's raw number.</li>
       <li><b>Sample size.</b> Each held-out tier rests on 40 to over a thousand games. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
       <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at past seasons. New inputs were chosen on 2022–24 only, so the 2025–26 column is the fairest check; the forward Results page is the honest one.</li>
       <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
@@ -532,7 +532,7 @@ function viewBacktest() {
       <li><b>Opponent home/away and history.</b> In testing, what a defense allows at home vs. on the road helped only passing yards and completions, so only those models use it; cards show it as context for every stat. A player's own history against this opponent (usually 1–3 past games) added nothing for RB, WR or TE stats, so it's left out.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
-      <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the tested rate already accounts for the player's averages.</li>
+      <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the chance this week already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>
     <h3>Projected lines</h3>
@@ -543,7 +543,7 @@ function viewBacktest() {
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
       <div class="panel"><h3>${esc(m.label)} ${line}+</h3>
       <span class="count">${s.heldOut.n} held-out games · ${pct(s.heldOut.base)} cleared it overall</span>
-      <table class="data"><thead><tr><th class="t">Model says</th><th>Games</th><th>Hit</th><th>2025–26 only</th></tr></thead><tbody>
+      <table class="data"><thead><tr><th class="t">Model score</th><th>Games</th><th>Hit</th><th>2025–26 only</th></tr></thead><tbody>
       ${[...s.tiers].reverse().map((t) => { const h = ["2025", "2026"].reduce((a, y) => t.bySeason[y] ? [a[0] + t.bySeason[y][0], a[1] + t.bySeason[y][1]] : a, [0, 0]);
         return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n}</td><td class="r">${pct(t.hit)}</td><td>${h[1] ? `${pct(h[0] / h[1])} <span class="count">(${h[1]})</span>` : "–"}</td></tr>`; }).join("")}
       </tbody></table></div>`).join("")).join("")}</div>
