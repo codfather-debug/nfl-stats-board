@@ -87,6 +87,9 @@ td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 
 .hit { color: var(--good); font-weight: 700; } .miss { color: var(--bad); font-weight: 700; } .void { color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel > * { min-width: 0; }
+table.mt td.who { min-width: 104px; } table.mt td, table.mt th { padding: 5px 4px; } table.mt td.who .count { font-size: 12px; }
+@media (max-width: 480px) { .panel { padding: 10px; } }
 .panel table.data th { background: none; padding: 3px 6px; } .panel table.data td { padding: 4px 6px; }
 .notes { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; }
 .notes li { margin: 8px 0; max-width: 80ch; }
@@ -132,7 +135,7 @@ function history(p, stat, line) {
   return { hits: vals.filter((v) => v >= line).length, games: vals.length, hits5: l5.filter((v) => v >= line).length, games5: l5.length };
 }
 const mileText = (mk, line) => mk === "td" ? "Anytime TD" : `${MARKETS[mk].label} ${line}+`;
-const state = { tab: "top", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
+const state = { tab: "top", mgame: "", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
 const DEF = Object.fromEntries((DATA.defenses || []).map((d) => [`${d.team}|${d.pos}`, d]));
 const DEF_COLS = { QB: ["passing_yards", "passing_tds", "completions", "attempts", "rushing_yards"],
   RB: ["rushing_yards", "carries", "scrimmage_yards", "receptions", "receiving_yards", "rr_tds"],
@@ -229,22 +232,30 @@ const statusFlag = (s) => !s || s === "Active" ? "" : `<span class="flag${UNAVAI
 const available = (p) => !UNAVAILABLE.has(p.status);
 
 function tierInfo(mk, line, prob) { return tierFor(MARKETS[mk].lines[line].tiers, prob); }
+const PERFECT = 1, PERFECT_MIN_GAMES = 3, PERFECT_MIN_RATE = 0.6;
 function bestPlays(min) {
   // One card per player and stat: the highest milestone whose tested rate clears `min`.
+  // The 100% filter instead keeps milestones the player has cleared in every game this season
+  // (3+ games) that also tested at 60%+.
   const out = [];
   for (const p of DATA.players) {
     if (!available(p) || started(p.team)) continue;
     const best = {};
     for (const [k, v] of Object.entries(p.plays)) {
       const [mk, line] = k.split("|");
-      if (v.rate >= min && (!best[mk] || +line > best[mk].line)) best[mk] = { mk, line: +line, ...v };
+      let ok = v.rate >= min;
+      if (min === PERFECT) {
+        const h = history(p, MARKETS[mk].stat, +line);
+        ok = v.rate >= PERFECT_MIN_RATE && h.games >= PERFECT_MIN_GAMES && h.hits === h.games;
+      }
+      if (ok && (!best[mk] || +line > best[mk].line)) best[mk] = { mk, line: +line, ...v };
     }
     for (const b of Object.values(best)) out.push({ pl: p, ...b });
   }
   return out.sort((a, b) => b.rate - a.rate || b.p - a.p);
 }
 
-const TABS = [["top", "Top plays"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How tested"]];
+const TABS = [["top", "Top plays"], ["matchup", "Matchups"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How tested"]];
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${l}</button>`).join("");
 }
@@ -263,7 +274,8 @@ function viewTop() {
   return `<div class="stack">
     <div><h2>Week ${DATA.week} top plays</h2>
     <p class="hint">Each card is the highest milestone for that player and stat that cleared the bar in testing. The big number is how often players in that model tier actually got there in seasons the model never trained on. It isn't the model's raw output. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
-    <div class="filters">${seg("min", [[0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
+    <div class="filters">${seg("min", [[PERFECT, "100%"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
+    ${state.min === PERFECT ? `<p class="hint">100%: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) that also tested at ${pct(PERFECT_MIN_RATE)} or better. A perfect record so far doesn't make it a sure thing; the big number is still the tested rate.</p>` : ""}
     ${days.length ? days.map((d) => `<div class="day"><h3>${esc(d)}</h3></div><div class="cards">${byDay[d].map(card).join("")}</div>`).join("")
       : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
   </div>`;
@@ -408,6 +420,75 @@ function viewResults() {
   </div>`;
 }
 
+// Starters: the most-used available players at each spot, by snap share over the last 3 games
+// (season, then last game, as fallbacks). Running backs go by share of carries plus targets, so a
+// fullback who plays a lot of snaps doesn't count as the RB2.
+const STARTERS = { QB: 1, RB: 2, WR: 3, TE: 1 };
+const GROUPS = [
+  ["QB", ["QB"], [["pass_yds", "Pass yds"], ["completions", "Comp"], ["pass_tds", "Pass TD"], ["rush_yds", "Rush yds"]]],
+  ["RB", ["RB"], [["rush_yds", "Rush yds"], ["carries", "Car"], ["receptions", "Rec"], ["scrimmage", "Rush+rec"], ["td", "TD"]]],
+  ["WR / TE", ["WR", "TE"], [["receptions", "Rec"], ["rec_yds", "Rec yds"], ["long_rec", "Long"], ["td", "TD"]]],
+];
+const GROUP_DEF = { QB: [["passing_yards", "pass yds"], ["rushing_yards", "rush yds"]], RB: [["rushing_yards", "rush yds"], ["receiving_yards", "rec yds"]],
+  WR: [["receiving_yards", "rec yds"], ["receptions", "rec"]], TE: [["receiving_yards", "rec yds"], ["receptions", "rec"]] };
+const usage = (p) => p.x.snap_l3 ?? p.x.snap_g ?? p.x.snap_last ?? 0;
+const rank = (p) => p.pos === "RB" ? (p.x.b_carries_sh || 0) + (p.x.b_targets_sh || 0) : usage(p);
+function starters(team) {
+  const mine = DATA.players.filter((p) => p.team === team && Object.keys(p.plays).length);
+  const out = [], hurt = [];
+  for (const [pos, n] of Object.entries(STARTERS)) {
+    const at = mine.filter((p) => p.pos === pos).sort((a, b) => rank(b) - rank(a));
+    // Past the top spot, list only players with a real role.
+    const ok = at.filter(available).filter((p, i) => i === 0 || rank(p) >= (pos === "RB" ? 0.08 : 0.25));
+    out.push(...ok.slice(0, n));
+    // Would-be starters ruled out, so it's clear who's missing.
+    hurt.push(...at.filter((p) => !available(p) && rank(p) >= rank(ok[n - 1] || { pos, x: {} })));
+  }
+  return { out, hurt };
+}
+function bestOf(p) {
+  let best = null;
+  for (const [k, v] of Object.entries(p.plays)) {
+    const [mk, line] = k.split("|");
+    if (!best || v.rate > best.rate || (v.rate === best.rate && +line > best.line)) best = { mk, line: +line, rate: v.rate };
+  }
+  return best;
+}
+function mCell(p, mk) {
+  const m = MARKETS[mk];
+  if (!p.plays[`${mk}|${Object.keys(m.lines)[0]}`]) return `<td class="count">–</td>`;
+  if (mk === "td") { const r = p.plays["td|1"].rate; return `<td class="r ${r >= 0.5 ? "h3" : ""}">${pct(r)}<span class="hh">tested</span></td>`; }
+  return `<td><b>${num(p.proj[mk])}</b><span class="hh">avg ${num(p.x[m.stat + "_g"] ?? p.x["prev_" + m.stat])}</span></td>`;
+}
+function teamPanel(team, opp) {
+  const { out, hurt } = starters(team), g = gameOf(team);
+  return `<div class="panel"><div class="panel-head"><h3>${esc(team)} offense</h3><span class="count">vs ${esc(opp)} defense · ${g.home ? "home" : "away"}</span></div>
+    ${hurt.length ? `<div class="mu"><span class="flag bad">Out</span> ${hurt.map((p) => `${esc(p.player)} (${p.pos}${p.status === "Doubtful" ? ", doubtful" : ""})`).join(", ")}</div>` : ""}
+    ${GROUPS.map(([label, poss, cols]) => {
+      const ps = out.filter((p) => poss.includes(p.pos));
+      if (!ps.length) return "";
+      const dl = poss.map((pos) => { const d = DEF[`${opp}|${pos}`]; return d ? `${pos}s: ${GROUP_DEF[pos].map(([c, l]) => `<span class="${rankClass(d[c][2])}">${ord(d[c][2])}</span> ${l}`).join(", ")}` : ""; }).filter(Boolean).join(" · ");
+      return `<div><div class="mu">${esc(opp)} allows to ${dl}</div>
+      <div class="tablebox"><table class="data mt"><thead><tr><th class="t">${label}</th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>
+      ${ps.map((p) => { const b = bestOf(p); return `<tr><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}${p.x.missed > 0 ? '<span class="flag">Back</span>' : ""}
+        <div class="count">${pct(usage(p))} snaps${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div></td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
+      </tbody></table></div></div>`;
+    }).join("")}
+  </div>`;
+}
+function viewMatchup() {
+  const games = DATA.slate.filter((g) => g.home).sort((a, b) => kickTime(a.kickoff) - kickTime(b.kickoff));
+  if (!games.length) return `<p class="hint">No games scheduled.</p>`;
+  const g = games.find((x) => x.team === state.mgame) || games.find((x) => !started(x.team)) || games[0];
+  const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
+  return `<div class="stack">
+    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the tested chance of an anytime TD. "Best" is the player's highest tested milestone this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
+    <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
+    <span class="count">${where}</span></div>
+    <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
+  </div>`;
+}
+
 function viewDefense() {
   const pos = state.dpos, cols = DEF_COLS[pos], sort = cols.includes(state.dsort) ? state.dsort : cols[0];
   const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => a[sort][2] - b[sort][2]);
@@ -458,7 +539,7 @@ function render() {
   renderTabs();
   const built = new Date(DATA.builtAt);
   $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No games scheduled";
-  $("#view").innerHTML = { top: viewTop, stats: viewStats, defense: viewDefense, results: viewResults, backtest: viewBacktest }[state.tab]();
+  $("#view").innerHTML = { top: viewTop, matchup: viewMatchup, stats: viewStats, defense: viewDefense, results: viewResults, backtest: viewBacktest }[state.tab]();
 }
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-tab]");
