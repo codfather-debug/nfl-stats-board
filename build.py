@@ -114,16 +114,32 @@ def candidates(pg, teams, week, games):
     return up.merge(lines[["week", "team", "opp", "imp", "margin", "home", "game_id"]], how="left", on=["week", "team"])
 
 
-def score(rows, model, slate_by_team):
-    """One record per player on the slate with inputs, probabilities and tested rates."""
-    inputs = sorted({f for m in model["markets"].values() for f in m["inputs"]} | {"gp"} |
+# Shown on the page but not model inputs (or inputs some models skip).
+SHOWN = ["gp", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g", "rz_opp_sh",
+         "vac_carries", "vac_targets"]
+# Each player's game log, for hit history. Keep in step with LOG in template.html.
+LOG = ["week", "opp", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
+       "long_rec", "rr_tds", "rz_opp", "completions", "attempts", "passing_yards", "passing_tds"]
+
+
+def game_logs(pg):
+    out = {}
+    for r in pg.sort_values("week").to_dict("records"):
+        out.setdefault(r["pid"], []).append([r[c] if isinstance(r[c], str) else round(float(r[c]), 2) for c in LOG])
+    return out
+
+
+def score(rows, model, slate_by_team, logs):
+    """One record per player on the slate with inputs, probabilities, tested rates and game log."""
+    inputs = sorted({f for m in model["markets"].values() for f in m["inputs"]} | set(SHOWN) |
                     {f"{m['stat']}_g" for m in model["markets"].values()} | {f"{m['stat']}_l3" for m in model["markets"].values()})
     players = []
     for r in rows.itertuples(index=False):
         x = {k: (None if pd.isna(getattr(r, k)) else round(float(getattr(r, k)), 4)) for k in inputs}
         game = slate_by_team[r.team]
         x.update(imp=game["imp"], margin=game["margin"])
-        p = {"player": r.player, "key": r.key, "team": r.team, "opp": game["opp"], "pos": r.pos, "x": x, "plays": {}}
+        p = {"player": r.player, "key": r.key, "team": r.team, "opp": game["opp"], "pos": r.pos, "x": x, "plays": {},
+             "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, [])}
         for mk, m in model["markets"].items():
             if r.pos not in m["pos"] or r.gp < model["minGames"] or not r.recent or game["imp"] is None:
                 continue
@@ -201,24 +217,24 @@ def main(src):
         games_week = slate(games, week)
         slate_by_team = {g["team"]: g for g in games_week}
         up = candidates(pg, set(slate_by_team), week, games)
-        rows = F.add_features(pg, up)
-        rows = rows[~rows.played & (rows.week == week)]
-        players = score(rows, model, slate_by_team)
         try:
             inj = injuries()
             data["injuriesAt"] = stamp(now)
         except Exception as e:
             print(f"Injury data unavailable: {e}")
             inj, data["injuriesAt"] = {}, ""
-        roster = {}
-        for p in players:
-            roster.setdefault(p["team"], []).append(p["key"])
-        for p in players:
-            p["status"] = status_for(p["team"], p["key"], inj, roster[p["team"]])
+        roster = up.groupby("team").key.apply(list).to_dict()
+        up["status"] = [status_for(t, k, inj, roster[t]) for t, k in zip(up.team, up.key)]
+        # Ruled-out teammates free up carries and targets for the rest.
+        out = {(SEASON, week, r.team, r.pid) for r in up.itertuples() if r.status in UNAVAILABLE}
+        rows = F.add_features(pg, up, out)
+        rows = rows[~rows.played & (rows.week == week)]
+        players = score(rows, model, slate_by_team, game_logs(pg))
         if len(players) < 50:
             sys.exit(f"Only {len(players)} players scored for week {week}; leaving the last page live.")
         data["slate"], data["players"] = games_week, players
         data["defenses"] = defenses(pg, week)
+        data["logCols"] = LOG
         if data["injuriesAt"]:
             snapshot(history, players, slate_by_team, week, now)
     try:

@@ -97,6 +97,9 @@ td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 
 .card .mu { font-size: 13px; color: var(--muted); }
 table.data th button { all: unset; cursor: pointer; } table.data th[aria-sort] { color: var(--fg); }
 tr.mine td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+details.log summary { cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; }
+details.log table.data { margin-top: 6px; font-size: 13px; } details.log table.data th, details.log table.data td { padding: 3px 5px; }
+.hh { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); }
 .more { justify-self: start; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 </style>
 <header class="top gutter">
@@ -120,14 +123,21 @@ const TEAMS = { // Keep in step with TEAMS in build.py.
   Rams: "LA", Chargers: "LAC", Raiders: "LV", Dolphins: "MIA", Vikings: "MIN", Patriots: "NE", Saints: "NO", Giants: "NYG",
   Jets: "NYJ", Eagles: "PHI", Steelers: "PIT", Seahawks: "SEA", "49ers": "SF", Buccaneers: "TB", Titans: "TEN", Commanders: "WAS" };
 const STAT_SHORT = { rush_yds: "rush yds", carries: "carries", rec_yds: "rec yds", receptions: "rec", scrimmage: "rush+rec yds",
-  pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
+  td: "TD", long_rush: "yd long rush", long_rec: "yd long catch", pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
+const LOG = Object.fromEntries((DATA.logCols || []).map((c, i) => [c, i])); // Keep in step with LOG in build.py.
+function logStat(row, stat) { return stat === "scrimmage_yards" ? row[LOG.rushing_yards] + row[LOG.receiving_yards] : row[LOG[stat]]; }
+function history(p, stat, line) {
+  const vals = p.log.map((r) => logStat(r, stat)), l5 = vals.slice(-5);
+  return { hits: vals.filter((v) => v >= line).length, games: vals.length, hits5: l5.filter((v) => v >= line).length, games5: l5.length };
+}
+const mileText = (mk, line) => mk === "td" ? "Anytime TD" : `${MARKETS[mk].label} ${line}+`;
 const state = { tab: "top", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
 const DEF = Object.fromEntries((DATA.defenses || []).map((d) => [`${d.team}|${d.pos}`, d]));
 const DEF_COLS = { QB: ["passing_yards", "passing_tds", "completions", "attempts", "rushing_yards"],
-  RB: ["rushing_yards", "carries", "scrimmage_yards", "receptions", "receiving_yards"],
-  WR: ["targets", "receptions", "receiving_yards"], TE: ["targets", "receptions", "receiving_yards"] };
+  RB: ["rushing_yards", "carries", "scrimmage_yards", "receptions", "receiving_yards", "rr_tds"],
+  WR: ["targets", "receptions", "receiving_yards", "rr_tds"], TE: ["targets", "receptions", "receiving_yards", "rr_tds"] };
 const COL_LABEL = { passing_yards: "Pass yds", passing_tds: "Pass TD", completions: "Comp", attempts: "Att", rushing_yards: "Rush yds",
-  carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets" };
+  carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets", rr_tds: "TDs" };
 const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 const rankClass = (r) => r <= 8 ? "soft" : r >= 25 ? "tough" : "";
 function matchup(p, stat) { const d = DEF[`${p.opp}|${p.pos}`]; return d && d[stat] ? { v: d[stat][0], lg: d[stat][1], rank: d[stat][2], games: d.games } : null; }
@@ -202,9 +212,17 @@ async function update() {
     let changed = 0;
     for (const p of DATA.players) {
       const s = statusFor(p.team, p.key, inj, roster[p.team]);
-      if (s !== p.status) changed++;
+      if (s === p.status) continue;
+      changed++;
+      // A regular newly ruled out (or back) frees (or takes back) a share of carries and targets for teammates.
+      const flip = UNAVAILABLE.has(s) - UNAVAILABLE.has(p.status);
+      if (flip && p.regular) for (const q of DATA.players) if (q.team === p.team && q !== p) {
+        q.x.vac_carries = Math.min(1, Math.max(0, (q.x.vac_carries || 0) + flip * (p.x.carries_sh || 0)));
+        q.x.vac_targets = Math.min(1, Math.max(0, (q.x.vac_targets || 0) + flip * (p.x.targets_sh || 0)));
+      }
       p.status = s;
     }
+    rescore();
     done.push(`${changed} injury change${changed === 1 ? "" : "s"}`);
   } catch (e) { done.push("injuries unavailable"); }
   try {
@@ -229,7 +247,7 @@ const dayLabel = (d) => d.toLocaleDateString([], { weekday: "long", month: "shor
 const timeLabel = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const gameOf = (team) => DATA.slate.find((g) => g.team === team);
 const started = (team) => { const g = gameOf(team); return g.final || kickTime(g.kickoff) <= new Date(); };
-const mileLabel = (mk, line) => `${line}+ ${STAT_SHORT[mk]}`;
+const mileLabel = (mk, line) => mk === "td" ? "Anytime TD" : `${line}+ ${STAT_SHORT[mk]}`;
 const statusFlag = (s) => !s || s === "Active" ? "" : `<span class="flag${UNAVAILABLE.has(s) ? " bad" : ""}">${esc(s === "Injured Reserve" ? "IR" : s)}</span>`;
 const available = (p) => !UNAVAILABLE.has(p.status);
 
@@ -278,20 +296,57 @@ function card(x) {
   return `<div class="card">
     <div class="l1"><span><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · ${timeLabel(kickTime(g.kickoff))}</span><span>${statusFlag(p.status)}</span></div>
     <div class="name">${esc(p.player)}</div>
-    <div class="mile"><span>${esc(m.label)} ${x.line}+</span><span class="rate">${pct(x.rate)}</span></div>
+    <div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${pct(x.rate)}</span></div>
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
+    ${histLine(p, m, x.line)}
     ${muLine(p, m)}
-    <div class="l3">Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ${p.x.gp} games · team proj <b>${num(g.imp)}</b> · tier tested on ${t.n} games</div>
+    ${roleLine(p, x.mk)}
+    <div class="l3">Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · team proj <b>${num(g.imp)}</b> · tier tested on ${t.n} games</div>
+    ${gameLog(p, x.mk)}
   </div>`;
 }
 
+function histLine(p, m, line) {
+  const h = history(p, m.stat, line);
+  return `<div class="mu">Cleared in <b>${h.hits} of ${h.games}</b> games this season · last ${h.games5}: <b>${h.hits5}</b></div>`;
+}
+const RECEIVING = new Set(["rec_yds", "receptions", "long_rec"]), PASSING = new Set(["pass_yds", "pass_tds", "completions"]);
+function trend(now, before) {
+  const d = now - before;
+  return Math.abs(d) < 0.03 ? "" : d > 0 ? ' <span class="soft">▲</span>' : ' <span class="tough">▼</span>';
+}
+function roleLine(p, mk) {
+  if (PASSING.has(mk)) return "";
+  const x = p.x, bits = [];
+  const showT = RECEIVING.has(mk) || p.pos !== "RB" || mk === "td" || mk === "scrimmage";
+  const showC = !RECEIVING.has(mk) && (p.pos === "RB" || p.pos === "QB");
+  if (showC) bits.push(`Carry share <b>${pct(x.carries_sh)}</b> (last 3: ${pct(x.carries_sh3)}${trend(x.carries_sh3, x.carries_sh)})`);
+  if (showT) bits.push(`Target share <b>${pct(x.targets_sh)}</b> (last 3: ${pct(x.targets_sh3)}${trend(x.targets_sh3, x.targets_sh)})`);
+  if (mk === "td") bits.push(`Red zone <b>${num(x.rz_opp_g)}</b>/g · inside 10 <b>${num(x.i10_opp_g)}</b>/g · ${pct(x.rz_opp_sh)} of team RZ`);
+  const vc = x.vac_carries || 0, vt = x.vac_targets || 0;
+  if ((showC && vc >= 0.05) || (showT && vt >= 0.05))
+    bits.push(`<span class="soft">Teammates out:</span> ${[showC && vc >= 0.05 ? `${pct(vc)} of carries` : "", showT && vt >= 0.05 ? `${pct(vt)} of targets` : ""].filter(Boolean).join(", ")} open up`);
+  return bits.map((b) => `<div class="mu">${b}</div>`).join("");
+}
+const LOG_SHOW = { rush: ["carries", "rushing_yards", "long_rush", "rr_tds"], rec: ["targets", "receptions", "receiving_yards", "long_rec", "rr_tds"],
+  pass: ["completions", "attempts", "passing_yards", "passing_tds"] };
+const LOG_LABEL = { carries: "Car", rushing_yards: "Rush", long_rush: "Lng", rr_tds: "TD", targets: "Tgt", receptions: "Rec", receiving_yards: "Yds",
+  long_rec: "Lng", completions: "Cmp", attempts: "Att", passing_yards: "Yds", passing_tds: "TD" };
+function gameLog(p, mk) {
+  const kind = PASSING.has(mk) ? "pass" : RECEIVING.has(mk) || (mk !== "rush_yds" && mk !== "carries" && mk !== "long_rush" && p.pos !== "RB" && p.pos !== "QB") ? "rec" : "rush";
+  const cols = kind === "rush" && p.pos === "RB" && (mk === "scrimmage" || mk === "td") ? ["carries", "rushing_yards", "receptions", "receiving_yards", "rr_tds"] : LOG_SHOW[kind];
+  const lbl = (c) => c === "receiving_yards" && cols.includes("rushing_yards") ? "Rec yds" : LOG_LABEL[c];
+  return `<details class="log"><summary>Game log</summary><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Opp</th>${cols.map((c) => `<th>${lbl(c)}</th>`).join("")}<th>Snap</th></tr></thead><tbody>
+    ${[...p.log].reverse().map((r) => `<tr><td class="t">${r[LOG.week]}</td><td class="t">${esc(r[LOG.opp])}</td>${cols.map((c) => `<td>${num(r[LOG[c]], 0)}</td>`).join("")}<td>${pct(r[LOG.snap])}</td></tr>`).join("")}
+  </tbody></table></details>`;
+}
 function muLine(p, m) {
   const u = matchup(p, m.stat);
   if (!u) return "";
   return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span></div>`;
 }
 const STAT_SHORT_COL = { rushing_yards: "rush yds", carries: "carries", receiving_yards: "rec yds", receptions: "rec", scrimmage_yards: "rush+rec yds",
-  passing_yards: "pass yds", passing_tds: "pass TD", completions: "comp" };
+  passing_yards: "pass yds", passing_tds: "pass TD", completions: "comp", rr_tds: "TDs" };
 
 function viewStats() {
   const mk = state.market, m = MARKETS[mk], lines = Object.keys(m.lines).sort((a, b) => a - b);
@@ -301,13 +356,13 @@ function viewStats() {
   const shown = state.all ? rows : rows.slice(0, 40);
   const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line. Opp is where this week's opponent ranks in that stat allowed to the player's position (1st = allows the most).</p></div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line. Under each rate is how many games this season the player cleared it. Opp is where this week's opponent ranks in that stat allowed to the player's position (1st = allows the most).</p></div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
-    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>L3</th>${lines.map((l) => `<th>${l}+</th>`).join("")}</tr></thead><tbody>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>L3</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
     ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · proj ${num(g.imp)}${(() => { const u = matchup(p, m.stat); return u ? ` · opp <span class="${rankClass(u.rank)}">${ord(u.rank)}</span>` : ""; })()}</div></td>
       <td>${num(p.x[m.stat + "_g"])}</td><td>${num(p.x[m.stat + "_l3"])}</td>
-      ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate; return `<td class="r ${cls(r)}">${pct(r)}</td>`; }).join("")}</tr>`; }).join("")}
+      ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = history(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
     ${rows.length > 40 ? `<button class="more" data-set="all" data-val="${!state.all}">${state.all ? "Show top 40" : `Show all ${rows.length}`}</button>` : ""}
   </div>`;
@@ -357,7 +412,7 @@ function viewDefense() {
 
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
     <ul class="notes">
       <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
       <li><b>Sample size.</b> Each held-out tier rests on 40 to a few hundred games. QB stats rest on 658 QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
@@ -365,6 +420,8 @@ function viewBacktest() {
       <li><b>Closing lines vs. earlier lines.</b> Training used the final spread and total in nflverse's games.csv. The board uses whatever line is posted when it refreshes, which can be days before kickoff and less accurate.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season and a snap in one of the team's last two games. Weeks 1–2 and newly promoted starters (a backup QB stepping in, say) are thin or missing. A traded player is skipped until they have played for the new team.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
+      <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
+      <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the tested rate already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `

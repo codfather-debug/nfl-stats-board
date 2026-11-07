@@ -1,8 +1,8 @@
 # NFL Stat Board
 
 Players most likely to clear a stat milestone this week (rushing, receiving, receptions, rush + rec yards,
-rush attempts, passing yards, passing TDs, completions), with hit rates tested on seasons the model never saw.
-Built straight from nflverse data, nflverse/nfldata betting lines and ESPN injuries.
+rush attempts, anytime TD, longest rush, longest catch, passing yards, passing TDs, completions), with hit rates tested on seasons the model never saw.
+Also shows defense vs. position, hit history, role trends and teammates out. Built straight from nflverse data (weekly stats, snaps, play-by-play), nflverse/nfldata betting lines and ESPN injuries.
 
 - `features.py`: pre-game features, shared by training and the daily build. Also holds the milestone list.
 - `train.py`: fits one logistic model per milestone and grades it walk-forward (2024 predicts 2025, then 2024–25 predicts 2026). Writes `model.json`. Run by hand, for example after adding a season or mid-season to fold in new weeks.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fit one model per milestone and write model.json. Run by hand when adding a season, not daily.
 
-Usage: train.py [data_dir]   (data_dir holds snapsYYYY.csv, statsYYYY.csv and games.csv; else downloads)
+Usage: train.py [data_dir]   (data_dir holds snapsYYYY.csv, statsYYYY.csv, pbpYYYY.csv.gz and games.csv; else downloads)
 Needs numpy, pandas and scikit-learn.
 
 Tier hit rates are graded walk-forward only: 2024 predicts 2025, then 2024-25 predicts 2026.
