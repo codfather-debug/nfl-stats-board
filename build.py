@@ -83,12 +83,10 @@ def slate(games, week):
     out = []
     for r in g.itertuples():
         ko = kickoff(r.gameday, r.gametime)
-        has_line = pd.notna(r.spread_line) and pd.notna(r.total_line)
-        for team, opp, home, sign in ((r.home_team, r.away_team, 1, 1), (r.away_team, r.home_team, 0, -1)):
-            out.append({"team": team, "opp": opp, "home": home, "kickoff": stamp(ko), "final": bool(pd.notna(r.result)),
-                        "total": float(r.total_line) if has_line else None,
-                        "margin": sign * float(r.spread_line) if has_line else None,
-                        "imp": (r.total_line + sign * r.spread_line) / 2 if has_line else None})
+        indoor, turf = int(r.roof in ("dome", "closed")), int(isinstance(r.surface, str) and r.surface != "grass")
+        for team, opp, home in ((r.home_team, r.away_team, 1), (r.away_team, r.home_team, 0)):
+            out.append({"team": team, "opp": opp, "home": home, "indoor": indoor, "turf": turf,
+                        "kickoff": stamp(ko), "final": bool(pd.notna(r.result))})
     return out
 
 
@@ -96,9 +94,18 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+def linear(coef, x):
+    return coef["intercept"] + sum(c * (x.get(k) or 0) for k, c in coef.items() if k != "intercept")
+
+
 def predict(coef, x):
     """Keep in step with predict in template.html."""
-    return sigmoid(coef["intercept"] + sum(c * (x.get(k) or 0) for k, c in coef.items() if k != "intercept"))
+    return sigmoid(linear(coef, x))
+
+
+def project(coef, x):
+    """Median projection. Keep in step with project in template.html."""
+    return max(0.0, linear(coef, x))
 
 
 def tier_for(tiers, p):
@@ -111,14 +118,14 @@ def candidates(pg, teams, week, games):
     last = last[last.team.isin(teams)]
     up = last[["season", "team", "pid", "player", "pos", "key"]].assign(week=week)
     lines = F.team_lines(games, SEASON)
-    return up.merge(lines[["week", "team", "opp", "imp", "margin", "home", "game_id"]], how="left", on=["week", "team"])
+    return up.merge(lines[["week", "team", "opp", "home", "indoor", "turf", "game_id"]], how="left", on=["week", "team"])
 
 
 # Shown on the page but not model inputs (or inputs some models skip).
 SHOWN = ["gp", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g", "rz_opp_sh",
          "vac_carries", "vac_targets"]
 # Each player's game log, for hit history. Keep in step with LOG in template.html.
-LOG = ["week", "opp", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
+LOG = ["week", "opp", "home", "indoor", "turf", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
        "long_rec", "rr_tds", "rz_opp", "completions", "attempts", "passing_yards", "passing_tds"]
 
 
@@ -137,12 +144,13 @@ def score(rows, model, slate_by_team, logs):
     for r in rows.itertuples(index=False):
         x = {k: (None if pd.isna(getattr(r, k)) else round(float(getattr(r, k)), 4)) for k in inputs}
         game = slate_by_team[r.team]
-        x.update(imp=game["imp"], margin=game["margin"])
         p = {"player": r.player, "key": r.key, "team": r.team, "opp": game["opp"], "pos": r.pos, "x": x, "plays": {},
-             "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, [])}
+             "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, []), "proj": {}}
         for mk, m in model["markets"].items():
-            if r.pos not in m["pos"] or r.gp < model["minGames"] or not r.recent or game["imp"] is None:
+            if r.pos not in m["pos"] or r.gp < model["minGames"] or not r.recent:
                 continue
+            if "proj" in m:
+                p["proj"][mk] = round(project(m["proj"]["coef"], x), 1)
             for line, spec in m["lines"].items():
                 prob = predict(spec["coef"], x)
                 p["plays"][f"{mk}|{line}"] = {"p": round(prob, 4), "rate": tier_for(spec["tiers"], prob)["hit"]}
@@ -184,7 +192,8 @@ def snapshot(history, players, slate_by_team, week, now):
                 mk, line = k.split("|")
                 history["plays"].append({"season": SEASON, "week": week, "team": p["team"], "opp": p["opp"],
                                          "player": p["player"], "pos": p["pos"], "status": p["status"], "market": mk,
-                                         "line": int(line), "p": v["p"], "rate": v["rate"], "lockedAt": locked})
+                                         "line": int(line), "p": v["p"], "rate": v["rate"], "proj": p["proj"].get(mk),
+                                         "lockedAt": locked})
 
 
 def grade(history, pg, games, model):

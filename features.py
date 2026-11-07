@@ -79,7 +79,8 @@ def team_lines(games, season):
         spread = r.spread_line if pd.notna(r.spread_line) else np.nan
         total = r.total_line if pd.notna(r.total_line) else np.nan
         base = {"season": season, "week": int(r.week), "game_id": r.game_id, "total": total,
-                "kickoff": f"{r.gameday}T{r.gametime}:00-05:00", "final": pd.notna(r.result)}
+                "kickoff": f"{r.gameday}T{r.gametime}:00-05:00", "final": pd.notna(r.result),
+                "indoor": int(r.roof in ("dome", "closed")), "turf": int(isinstance(r.surface, str) and r.surface != "grass")}
         rows.append({**base, "team": r.home_team, "opp": r.away_team, "home": 1,
                      "imp": (total + spread) / 2, "margin": spread})
         rows.append({**base, "team": r.away_team, "opp": r.home_team, "home": 0,
@@ -165,6 +166,7 @@ def add_features(pg, upcoming=None, out=()):
         d3 = den.groupby(by).transform(lambda x: x.rolling(3, min_periods=1).sum())
         rows[c + "_sh3"] = (n3 / d3.replace(0, np.nan)).fillna(0)
     rows = add_vacated(rows, pg, set(out))
+    rows = add_splits(rows)
 
     # Played in one of the team's two previous games: a proxy for still having a role.
     team_weeks = pg.groupby(["season", "team"]).week.apply(lambda w: sorted(set(w))).to_dict()
@@ -177,6 +179,28 @@ def add_features(pg, upcoming=None, out=()):
     for p in POSITIONS:
         rows["is" + p] = (rows.pos == p).astype(int)
     return add_matchup(rows, pg)
+
+
+SPLIT_STATS = ["completions", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
+               "receiving_yards", "scrimmage_yards", "rr_tds", "long_rush", "long_rec"]
+SPLITS = ["home", "indoor", "turf"]
+
+
+def add_splits(rows):
+    """<stat>_<split>: the player's earlier average in games like this one (home or away, indoors or out,
+    turf or grass), plus how many such games. split_<stat>_<split> is that average minus the overall
+    average, shrunk toward zero when there are few such games."""
+    cols = {}
+    for v in SPLITS:
+        key = [rows.season, rows.pid, rows[v]]
+        n = rows.played.astype(int).groupby(key).cumsum() - rows.played.astype(int)
+        cols[f"n_{v}"] = n
+        for c in SPLIT_STATS:
+            val = rows[c].where(rows.played).fillna(0)
+            avg = (val.groupby(key).cumsum() - val) / n.replace(0, np.nan)
+            cols[f"{c}_{v}"] = avg
+            cols[f"split_{c}_{v}"] = ((avg - rows[c + "_g"]) * n / (n + 3)).fillna(0)
+    return pd.concat([rows, pd.DataFrame(cols, index=rows.index)], axis=1)
 
 
 def add_vacated(rows, pg, out):
@@ -272,7 +296,7 @@ def load_season(season, games, src=None):
     pbp = read_csv(f"{src}/pbp{season}.csv.gz" if src else pbp_url(season), usecols=PBP_COLS)
     pg = player_games(season, snaps, stats, pbp)
     lines = team_lines(games, season)
-    return pg.merge(lines[["season", "week", "team", "opp", "imp", "margin", "home", "game_id"]],
+    return pg.merge(lines[["season", "week", "team", "opp", "imp", "margin", "home", "indoor", "turf", "game_id"]],
                     how="left", on=["season", "week", "team"])
 
 
@@ -309,7 +333,10 @@ MARKETS = {
                     "matchup": True,
                  "feats": ["completions_g", "completions_l3", "attempts_g"]},
 }
-GAME = ["imp", "margin"]
+# Player stats only: the betting line (projected team points, spread) is left out by choice.
+# It mattered for passing yards and TDs (best held-out tier about 10 points higher with it) and
+# little elsewhere.
+GAME = []
 MIN_GAMES = 2
 
 
@@ -320,6 +347,6 @@ def model_inputs(market):
 
 
 def eligible(rows, market):
-    """Players the board would list: enough earlier games, a recent role, a betting line."""
+    """Players the board would list: enough earlier games and a recent role."""
     m = MARKETS[market]
-    return rows[rows.pos.isin(m["pos"]) & (rows.gp >= MIN_GAMES) & rows.recent & rows.imp.notna()]
+    return rows[rows.pos.isin(m["pos"]) & (rows.gp >= MIN_GAMES) & rows.recent]

@@ -14,7 +14,7 @@ import sys
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, QuantileRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -29,6 +29,31 @@ MIN_TIER = 40  # Smaller bins merge into the one below, so every tier rate rests
 
 def fit(df, inputs, y):
     return make_pipeline(StandardScaler(), LogisticRegression(C=.3, max_iter=2000)).fit(df[inputs].fillna(0), y)
+
+
+def fit_median(df, inputs, y):
+    return make_pipeline(StandardScaler(), QuantileRegressor(quantile=.5, alpha=0, solver="highs")).fit(df[inputs].fillna(0), y)
+
+
+def median_coefficients(model, inputs):
+    scaler, reg = model[0], model[1]
+    coef = reg.coef_ / scaler.scale_
+    return {"intercept": float(reg.intercept_ - (coef * scaler.mean_).sum()), **{f: float(c) for f, c in zip(inputs, coef)}}
+
+
+def projection(e, stat, inputs):
+    """Median projection: the value the player should land above half the time. Graded walk-forward too."""
+    p, y, avg = [], [], []
+    for train, test in FOLDS:
+        tr, te = e[e.season.isin(train)], e[e.season == test]
+        p.append(np.clip(fit_median(tr, inputs, tr[stat]).predict(te[inputs].fillna(0)), 0, None))
+        y.append(te[stat].values)
+        avg.append(te[stat + "_g"].fillna(0).values)
+    p, y, avg = map(np.concatenate, (p, y, avg))
+    return {"coef": median_coefficients(fit_median(e, inputs, e[stat]), inputs),
+            "heldOut": {"n": int(len(y)), "mae": round(float(np.abs(p - y).mean()), 2),
+                        "maeAvg": round(float(np.abs(avg - y).mean()), 2),
+                        "over": round(float((y > p).mean()), 3), "under": round(float((y < p).mean()), 3)}}
 
 
 def coefficients(model, inputs):
@@ -99,6 +124,10 @@ def main(src):
             t = market["lines"][str(line)]["tiers"]
             print(f"{key} {line}+  n={len(y)} base={y.mean():.2f}  " +
                   "  ".join(f"{x['min']:.0%}+:{x['hit']:.0%}({x['n']})" for x in t))
+        if key != "td":  # A median of zero TDs says nothing; the TD page shows the chance instead.
+            market["proj"] = projection(e, m["stat"], inputs)
+            h = market["proj"]["heldOut"]
+            print(f"{key} projection: MAE {h['mae']} vs season avg {h['maeAvg']}, over {h['over']:.0%} under {h['under']:.0%}")
         model["markets"][key] = market
     with open(os.path.join(HERE, "model.json"), "w") as f:
         json.dump(model, f, indent=1)

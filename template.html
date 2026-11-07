@@ -107,7 +107,7 @@ details.log table.data { margin-top: 6px; font-size: 13px; } details.log table.d
     <div class="brand">
       <h1>NFL Stat Board</h1>
       <small id="sub"></small>
-      <div class="updater"><span id="update-status" aria-live="polite"></span><button id="update-btn" type="button">Update injuries &amp; lines</button></div>
+      <div class="updater"><span id="update-status" aria-live="polite"></span><button id="update-btn" type="button">Update injuries</button></div>
     </div>
   </div>
 </header>
@@ -158,16 +158,18 @@ function predict(coef, x) { // Keep in step with predict in build.py.
 }
 const tierFor = (tiers, p) => tiers.filter((t) => p >= t.min).pop();
 
+function project(coef, x) { // Keep in step with project in build.py.
+  let z = coef.intercept;
+  for (const [k, c] of Object.entries(coef)) if (k !== "intercept") z += c * (x[k] || 0);
+  return Math.max(0, z);
+}
 function rescore() {
-  const games = Object.fromEntries(DATA.slate.map((g) => [g.team, g]));
   for (const p of DATA.players) {
-    const g = games[p.team];
-    if (g.imp == null) continue;
-    p.x.imp = g.imp; p.x.margin = g.margin;
     for (const k of Object.keys(p.plays)) {
       const [mk, line] = k.split("|"), spec = MARKETS[mk].lines[line], prob = predict(spec.coef, p.x);
       p.plays[k] = { p: prob, rate: tierFor(spec.tiers, prob).hit };
     }
+    for (const mk of Object.keys(p.proj)) p.proj[mk] = project(MARKETS[mk].proj.coef, p.x);
   }
 }
 function parseInjuries(json) { // Keep in step with injuries in build.py.
@@ -186,20 +188,6 @@ function statusFor(team, key, inj, teammates) { // Keep in step with status_for 
   const listed = Object.keys(inj).filter((k) => k.startsWith(team + "|") && surname(k.split("|")[1]) === surname(key));
   if (listed.length === 1 && teammates.filter((t) => surname(t) === surname(key)).length === 1) return inj[listed[0]];
   return "";
-}
-function parseLines(text) { // Keep in step with slate in build.py.
-  const rows = text.trim().split("\n"), head = rows[0].split(","), out = {};
-  const col = (n) => head.indexOf(n);
-  for (const line of rows.slice(1)) {
-    const c = line.split(",");
-    if (c[col("season")] !== String(DATA.season) || c[col("week")] !== String(DATA.week)) continue;
-    const spread = parseFloat(c[col("spread_line")]), total = parseFloat(c[col("total_line")]);
-    if (isNaN(spread) || isNaN(total)) continue;
-    const final = c[col("result")] !== "";
-    out[c[col("home_team")]] = { total, margin: spread, imp: (total + spread) / 2, final };
-    out[c[col("away_team")]] = { total, margin: -spread, imp: (total - spread) / 2, final };
-  }
-  return out;
 }
 async function update() {
   const btn = $("#update-btn"), status = $("#update-status");
@@ -225,18 +213,6 @@ async function update() {
     rescore();
     done.push(`${changed} injury change${changed === 1 ? "" : "s"}`);
   } catch (e) { done.push("injuries unavailable"); }
-  try {
-    const lines = parseLines(await (await fetch("https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv", { cache: "no-store" })).text());
-    let moved = 0;
-    for (const g of DATA.slate) {
-      const l = lines[g.team];
-      if (!l) continue;
-      if (l.imp !== g.imp) moved++;
-      Object.assign(g, l);
-    }
-    rescore();
-    done.push(`${moved / 2} line${moved === 2 ? "" : "s"} moved`);
-  } catch (e) { done.push("lines unavailable"); }
   status.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${done.join(", ")}`;
   btn.disabled = false;
   render();
@@ -301,11 +277,28 @@ function card(x) {
     ${histLine(p, m, x.line)}
     ${muLine(p, m)}
     ${roleLine(p, x.mk)}
-    <div class="l3">Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · team proj <b>${num(g.imp)}</b> · tier tested on ${t.n} games</div>
+    <div class="l3">${projText(p, x.mk)}Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · tier tested on ${t.n} games</div>
+    ${splitLine(p, m, g)}
     ${gameLog(p, x.mk)}
   </div>`;
 }
 
+const PROJ_UNIT = { rush_yds: "rush yds", carries: "carries", rec_yds: "rec yds", receptions: "rec", scrimmage: "rush+rec yds",
+  long_rush: "yd long rush", long_rec: "yd long catch", pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
+const projText = (p, mk) => p.proj[mk] == null ? "" : `Projected <b>${num(p.proj[mk])}</b> ${PROJ_UNIT[mk]} · `;
+// Home/away, indoors/outdoors and turf/grass averages from the game log.
+const SPLIT_DEFS = [["home", "Home", "Away"], ["indoor", "Indoors", "Outdoors"], ["turf", "Turf", "Grass"]];
+function splitAvg(p, stat, col, val) {
+  const g = p.log.filter((r) => r[LOG[col]] === val);
+  return { n: g.length, avg: g.length ? g.reduce((s, r) => s + logStat(r, stat), 0) / g.length : null };
+}
+function splitLine(p, m, g) {
+  const parts = SPLIT_DEFS.map(([col, yes, no]) => {
+    const here = g[col] ? 1 : 0, a = splitAvg(p, m.stat, col, here), b = splitAvg(p, m.stat, col, 1 - here);
+    return `${here ? yes : no} <b>${num(a.avg)}</b> <span class="count">(${a.n}g)</span> vs ${num(b.avg)}`;
+  });
+  return `<div class="mu">This game: ${parts.join(" · ")}</div>`;
+}
 function histLine(p, m, line) {
   const h = history(p, m.stat, line);
   return `<div class="mu">Cleared in <b>${h.hits} of ${h.games}</b> games this season · last ${h.games5}: <b>${h.hits5}</b></div>`;
@@ -337,7 +330,7 @@ function gameLog(p, mk) {
   const cols = kind === "rush" && p.pos === "RB" && (mk === "scrimmage" || mk === "td") ? ["carries", "rushing_yards", "receptions", "receiving_yards", "rr_tds"] : LOG_SHOW[kind];
   const lbl = (c) => c === "receiving_yards" && cols.includes("rushing_yards") ? "Rec yds" : LOG_LABEL[c];
   return `<details class="log"><summary>Game log</summary><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Opp</th>${cols.map((c) => `<th>${lbl(c)}</th>`).join("")}<th>Snap</th></tr></thead><tbody>
-    ${[...p.log].reverse().map((r) => `<tr><td class="t">${r[LOG.week]}</td><td class="t">${esc(r[LOG.opp])}</td>${cols.map((c) => `<td>${num(r[LOG[c]], 0)}</td>`).join("")}<td>${pct(r[LOG.snap])}</td></tr>`).join("")}
+    ${[...p.log].reverse().map((r) => `<tr><td class="t">${r[LOG.week]}</td><td class="t">${r[LOG.home] ? "" : "@"}${esc(r[LOG.opp])}</td>${cols.map((c) => `<td>${num(r[LOG[c]], 0)}</td>`).join("")}<td>${pct(r[LOG.snap])}</td></tr>`).join("")}
   </tbody></table></details>`;
 }
 function muLine(p, m) {
@@ -356,12 +349,12 @@ function viewStats() {
   const shown = state.all ? rows : rows.slice(0, 40);
   const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line. Under each rate is how many games this season the player cleared it. Opp is where this week's opponent ranks in that stat allowed to the player's position (1st = allows the most).</p></div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
-    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>L3</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
-    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · proj ${num(g.imp)}${(() => { const u = matchup(p, m.stat); return u ? ` · opp <span class="${rankClass(u.rank)}">${ord(u.rank)}</span>` : ""; })()}</div></td>
-      <td>${num(p.x[m.stat + "_g"])}</td><td>${num(p.x[m.stat + "_l3"])}</td>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
+    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
+      <td>${num(p.x[m.stat + "_g"])}</td><td>${m.proj ? `<b>${num(p.proj[mk])}</b>` : num(p.x[m.stat + "_l3"])}</td>
       ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = history(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
     ${rows.length > 40 ? `<button class="more" data-set="all" data-val="${!state.all}">${state.all ? "Show top 40" : `Show all ${rows.length}`}</button>` : ""}
@@ -412,18 +405,24 @@ function viewDefense() {
 
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, and snap share in the player's last game. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
     <ul class="notes">
       <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
       <li><b>Sample size.</b> Each held-out tier rests on 40 to a few hundred games. QB stats rest on 658 QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
       <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at these same seasons. That will flatter the results a little. The forward Results page is the honest check.</li>
-      <li><b>Closing lines vs. earlier lines.</b> Training used the final spread and total in nflverse's games.csv. The board uses whatever line is posted when it refreshes, which can be days before kickoff and less accurate.</li>
+      <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
+      <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season and a snap in one of the team's last two games. Weeks 1–2 and newly promoted starters (a backup QB stepping in, say) are thin or missing. A traded player is skipped until they have played for the new team.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
       <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the tested rate already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>
+    <h3>Projected lines</h3>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Stat</th><th>Games</th><th>Avg miss</th><th>Season avg miss</th><th>Over</th><th>Under</th></tr></thead><tbody>
+    ${Object.values(MARKETS).filter((m) => m.proj).map((m) => { const h = m.proj.heldOut; return `<tr><td class="t">${esc(m.label)}</td><td>${h.n}</td><td class="r">${num(h.mae)}</td><td>${num(h.maeAvg)}</td><td>${pct(h.over)}</td><td>${pct(h.under)}</td></tr>`; }).join("")}
+    </tbody></table></div>
+    <p class="hint">"Avg miss" is how far the projection landed from the real result, on average, in held-out games. "Season avg miss" is the same for just using the player's season average. Over and under don't add to 100% because some games land exactly on the projection, most often zero for a backup.</p>
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
       <div class="panel"><h3>${esc(m.label)} ${line}+</h3>
       <span class="count">${s.heldOut.n} held-out games · ${pct(s.heldOut.base)} cleared it overall</span>
