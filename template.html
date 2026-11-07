@@ -138,10 +138,10 @@ const mileText = (mk, line) => mk === "td" ? "Anytime TD" : `${MARKETS[mk].label
 const state = { tab: "top", mgame: "", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
 const DEF = Object.fromEntries((DATA.defenses || []).map((d) => [`${d.team}|${d.pos}`, d]));
 const DEF_COLS = { QB: ["passing_yards", "passing_tds", "completions", "attempts", "rushing_yards"],
-  RB: ["rushing_yards", "carries", "scrimmage_yards", "receptions", "receiving_yards", "rr_tds"],
-  WR: ["targets", "receptions", "receiving_yards", "rr_tds"], TE: ["targets", "receptions", "receiving_yards", "rr_tds"] };
+  RB: ["rushing_yards", "carries", "scrimmage_yards", "tshare", "receptions", "receiving_yards", "rr_tds"],
+  WR: ["targets", "tshare", "receptions", "receiving_yards", "rr_tds"], TE: ["targets", "tshare", "receptions", "receiving_yards", "rr_tds"] };
 const COL_LABEL = { passing_yards: "Pass yds", passing_tds: "Pass TD", completions: "Comp", attempts: "Att", rushing_yards: "Rush yds",
-  carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets", rr_tds: "TDs" };
+  carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets", rr_tds: "TDs", tshare: "Tgt share" };
 const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 const rankClass = (r) => r <= 8 ? "soft" : r >= 25 ? "tough" : "";
 function matchup(p, stat) { const d = DEF[`${p.opp}|${p.pos}`]; return d && d[stat] ? { v: d[stat][0], lg: d[stat][1], rank: d[stat][2], games: d.games } : null; }
@@ -361,13 +361,15 @@ function scheduleLine(p, m) {
   }
   return lines.map((l) => `<div class="mu">${l}</div>`).join("");
 }
+const TARGET_STATS = new Set(["receptions", "receiving_yards", "scrimmage_yards", "rr_tds", "long_rec"]);
 function muLine(p, m) {
   const u = matchup(p, m.stat);
   if (!u) return "";
   const g = gameOf(p.team), d = DEF[`${p.opp}|${p.pos}`], atHome = !g.home;
   const v = d[m.stat][atHome ? 3 : 4], n = atHome ? d.gamesHome : d.gamesRoad;
   const venue = v == null ? "" : ` · <b>${num(v)}</b> ${atHome ? "at home" : "on the road"} <span class="count">(${n}g)</span>`;
-  return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span>${venue}</div>`;
+  const ts = d.tshare && p.pos !== "QB" && TARGET_STATS.has(m.stat) ? `<div class="mu">${esc(p.opp)} sends <b>${pct(d.tshare[0])}</b> of targets to ${p.pos}s (avg ${pct(d.tshare[1])}) · <span class="${rankClass(d.tshare[2])}">${ord(d.tshare[2])} most</span></div>` : "";
+  return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span>${venue}</div>${ts}`;
 }
 const STAT_SHORT_COL = { rushing_yards: "rush yds", carries: "carries", receiving_yards: "rec yds", receptions: "rec", scrimmage_yards: "rush+rec yds",
   passing_yards: "pass yds", passing_tds: "pass TD", completions: "comp", rr_tds: "TDs" };
@@ -380,11 +382,11 @@ function viewStats() {
   const shown = state.all ? rows : rows.slice(0, 40);
   const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
-    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
+    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${PASSING.has(mk) ? "" : ` · ${RECEIVING.has(mk) || p.pos !== "RB" ? `${pct(p.x.targets_sh)} tgt${trend(p.x.targets_sh3, p.x.targets_sh)}` : `${pct(p.x.carries_sh)} car${trend(p.x.carries_sh3, p.x.carries_sh)}`}`}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
       <td>${num(p.x[m.stat + "_g"])}</td><td>${m.proj ? `<b>${num(p.proj[mk])}</b>` : num(p.x[m.stat + "_l3"])}</td>
       ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = history(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
@@ -446,6 +448,13 @@ function starters(team) {
   }
   return { out, hurt };
 }
+// Share of team targets (and carries for backs) this season, with the last-3 trend arrow.
+function shareText(p) {
+  const x = p.x, bits = [];
+  if (p.pos === "RB") bits.push(`${pct(x.carries_sh)} car${trend(x.carries_sh3, x.carries_sh)}`);
+  if (p.pos !== "QB") bits.push(`${pct(x.targets_sh)} tgt${trend(x.targets_sh3, x.targets_sh)}`);
+  return bits.join(" · ");
+}
 function bestOf(p) {
   let best = null;
   for (const [k, v] of Object.entries(p.plays)) {
@@ -467,11 +476,13 @@ function teamPanel(team, opp) {
     ${GROUPS.map(([label, poss, cols]) => {
       const ps = out.filter((p) => poss.includes(p.pos));
       if (!ps.length) return "";
-      const dl = poss.map((pos) => { const d = DEF[`${opp}|${pos}`]; return d ? `${pos}s: ${GROUP_DEF[pos].map(([c, l]) => `<span class="${rankClass(d[c][2])}">${ord(d[c][2])}</span> ${l}`).join(", ")}` : ""; }).filter(Boolean).join(" · ");
+      const dl = poss.map((pos) => { const d = DEF[`${opp}|${pos}`]; if (!d) return "";
+        const ts = d.tshare && pos !== "QB" ? `, <b>${pct(d.tshare[0])}</b> of targets <span class="${rankClass(d.tshare[2])}">(${ord(d.tshare[2])})</span>` : "";
+        return `${pos}s: ${GROUP_DEF[pos].map(([c, l]) => `<span class="${rankClass(d[c][2])}">${ord(d[c][2])}</span> ${l}`).join(", ")}${ts}`; }).filter(Boolean).join(" · ");
       return `<div><div class="mu">${esc(opp)} allows to ${dl}</div>
       <div class="tablebox"><table class="data mt"><thead><tr><th class="t">${label}</th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>
       ${ps.map((p) => { const b = bestOf(p); return `<tr><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}${p.x.missed > 0 ? '<span class="flag">Back</span>' : ""}
-        <div class="count">${pct(usage(p))} snaps${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div></td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
+        <div class="count">${pct(usage(p))} snaps${p.pos !== "QB" ? ` · ${shareText(p)}` : ""}${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div></td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
       </tbody></table></div></div>`;
     }).join("")}
   </div>`;
@@ -482,7 +493,7 @@ function viewMatchup() {
   const g = games.find((x) => x.team === state.mgame) || games.find((x) => !started(x.team)) || games[0];
   const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
   return `<div class="stack">
-    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the tested chance of an anytime TD. "Best" is the player's highest tested milestone this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
+    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the tested chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the player's highest tested milestone this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
     <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
     <span class="count">${where}</span></div>
     <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
@@ -491,15 +502,15 @@ function viewMatchup() {
 
 function viewDefense() {
   const pos = state.dpos, cols = DEF_COLS[pos], sort = cols.includes(state.dsort) ? state.dsort : cols[0];
-  const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => a[sort][2] - b[sort][2]);
+  const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => (a[sort]?.[2] ?? 99) - (b[sort]?.[2] ?? 99));
   const opp = Object.fromEntries(DATA.slate.map((g) => [g.opp, g.team]));
   return `<div class="stack">
     <div><h2>Defense vs. position</h2><p class="hint">Per game allowed to each position this season, through Week ${DATA.week - 1}. Ranks run from 1st (allows the most, the softest matchup) to 32nd. Green is a top-8 soft matchup and red is a bottom-8 tough one. Tap a column to sort. Rows for defenses facing a team this week show the opponent.</p></div>
     <div class="filters">${seg("dpos", ["QB", "RB", "WR", "TE"].map((p) => [p, p + "s"]), pos)}</div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Defense</th><th class="t">Faces</th>${cols.map((c) => `<th${c === sort ? ' aria-sort="descending"' : ""}><button data-set="dsort" data-val="${c}">${COL_LABEL[c]}</button></th>`).join("")}</tr></thead><tbody>
-    ${rows.map((d) => `<tr><td class="t who">${esc(d.team)} <span class="count">${d.games}g</span></td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${cols.map((c) => `<td>${num(d[c][0])} <span class="${rankClass(d[c][2]) || "count"}">${ord(d[c][2])}</span></td>`).join("")}</tr>`).join("")}
+    ${rows.map((d) => `<tr><td class="t who">${esc(d.team)} <span class="count">${d.games}g</span></td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${cols.map((c) => d[c] ? `<td>${c === "tshare" ? pct(d[c][0]) : num(d[c][0])} <span class="${rankClass(d[c][2]) || "count"}">${ord(d[c][2])}</span></td>` : "<td>–</td>").join("")}</tr>`).join("")}
     </tbody></table></div>
-    <p class="hint">League average per game: ${cols.map((c) => `${COL_LABEL[c]} ${num(rows[0]?.[c][1])}`).join(" · ")}.</p>
+    <p class="hint">League average: ${cols.map((c) => `${COL_LABEL[c]} ${c === "tshare" ? pct(rows[0]?.[c]?.[1]) : num(rows[0]?.[c]?.[1])}`).join(" · ")}. Tgt share is the share of all passes thrown against that defense that went to ${pos}s.</p>
   </div>`;
 }
 

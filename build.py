@@ -216,6 +216,11 @@ def defenses(pg, week):
     t = F.defense_table(pg, SEASON, week)
     a = F.allowed_by_game(pg)
     a = a[(a.season == SEASON) & (a.week < week)]
+    # Share of all targets against each defense that went to each position.
+    tg = a.groupby(["defense", "pos"]).targets.sum()
+    tshare = tg / tg.groupby(level="defense").transform("sum").replace(0, float("nan"))
+    league = a.groupby("pos").targets.sum() / a.targets.sum()
+    trank = tshare.groupby(level="pos").rank(ascending=False, method="min")
     venue = a.groupby(["defense", "pos", "dhome"])[F.ALLOWED].mean()
     venue_n = a.groupby(["defense", "pos", "dhome"]).size()
     out = []
@@ -227,6 +232,9 @@ def defenses(pg, week):
             at = lambda h: round(float(venue.loc[(d, p, h), c]), 1) if (d, p, h) in venue.index else None
             # [per game, league avg, rank, at home, on the road]
             row[c] = [round(r[c], 1), round(r[c + "_lg"], 1), int(r[c + "_rank"]), at(1), at(0)]
+        if (d, p) in tshare.index and tshare[(d, p)] == tshare[(d, p)]:
+            # [share, league share, rank (1 = most)]
+            row["tshare"] = [round(float(tshare[(d, p)]), 3), round(float(league[p]), 3), int(trank[(d, p)])]
         out.append(row)
     return out
 
