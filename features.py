@@ -342,7 +342,11 @@ def add_matchup(rows, pg):
         per = prior.groupby(["defense", "pos"])[ALLOWED].mean()
         diff = (per - lg.reindex(per.index.get_level_values("pos")).values).add_prefix("dvp_")
         diff["dgp"] = prior.groupby(["defense", "pos"]).size()
-        overall.append(diff.reset_index().assign(season=s, week=w))
+        # drank_<stat>: 1 = allows the most to that position going into this week.
+        ranks = per.groupby(level="pos").rank(ascending=False, method="min").add_prefix("drank_")
+        league = pd.DataFrame(lg.reindex(per.index.get_level_values("pos")).values, index=per.index,
+                              columns=[f"dlg_{c}" for c in ALLOWED])
+        overall.append(diff.join(ranks).join(league).reset_index().assign(season=s, week=w))
         pv = prior.groupby(["defense", "pos", "dhome"])[ALLOWED].mean()
         n = prior.groupby(["defense", "pos", "dhome"]).size()
         dv = (pv - lg.reindex(pv.index.get_level_values("pos")).values).mul(n / (n + VENUE_SHRINK), axis=0)
@@ -351,8 +355,57 @@ def add_matchup(rows, pg):
                       how="left", on=["season", "week", "opp", "pos"])
     # The defense is at home when the player is on the road.
     rows["dhome"] = 1 - rows.home
-    return rows.merge(pd.concat(venue, ignore_index=True).rename(columns={"defense": "opp"}),
+    rows = rows.merge(pd.concat(venue, ignore_index=True).rename(columns={"defense": "opp"}),
                       how="left", on=["season", "week", "opp", "pos", "dhome"])
+    return add_schedule(rows)
+
+
+SOS_STATS = ["completions", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
+             "receiving_yards", "scrimmage_yards", "rr_tds"]
+TIERS = ((1, 10, "soft"), (11, 22, "mid"), (23, 32, "tough"))
+TIER_SHRINK = 3
+
+
+def tier_of(rank):
+    return np.select([rank <= 10, rank <= 22, rank > 22], ["soft", "mid", "tough"], default="")
+
+
+def add_schedule(rows):
+    """Strength of schedule and results against similar defenses, from earlier games this season.
+
+    Opponent strength is a ratio, allowed to the position over league average going into that game
+    (1.2 = gives up 20% more), so it scales to a committee back as well as a lead back.
+    sos_<stat>: average ratio of the defenses the player has faced (above 1 = easy schedule).
+    adj_<stat>: per-game average with each game divided by its opponent's ratio.
+    tier_<stat>: this week's opponent bucket by rank going in: soft (1-10), mid (11-22), tough (23-32).
+    sim_<stat>: average in earlier games against a defense in the same bucket, minus the overall
+    average, shrunk toward zero when there are few such games. simn_<stat> counts them.
+    """
+    cols = {}
+    by = [rows.season, rows.pid]
+    played = rows.played
+    for c in SOS_STATS:
+        ratio = ((rows["dlg_" + c] + rows["dvp_" + c]) / rows["dlg_" + c].replace(0, np.nan)).clip(0.5, 2)
+        cols["dratio_" + c] = ratio
+        opp = ratio.where(played)
+        n = opp.notna().astype(int).groupby(by).cumsum() - opp.notna().astype(int)
+        s = opp.fillna(0).groupby(by).cumsum() - opp.fillna(0)
+        cols["sos_" + c] = (s / n.replace(0, np.nan)).fillna(1)
+        adj = (rows[c] / ratio.fillna(1)).where(played)
+        cols["adj_" + c] = (adj.fillna(0).groupby(by).cumsum() - adj.fillna(0)) / (
+            played.astype(int).groupby(by).cumsum() - played.astype(int)).replace(0, np.nan)
+        tier = pd.Series(tier_of(rows["drank_" + c].fillna(99)), index=rows.index).where(rows["drank_" + c].notna(), "")
+        cols["tier_" + c] = tier
+        val = rows[c].where(played).fillna(0)
+        key = [rows.season, rows.pid, tier]
+        hit = (played & (tier != "")).astype(int)
+        tn = hit.groupby(key).cumsum() - hit
+        ts = (val * hit).groupby(key).cumsum() - val * hit
+        avg = ts / tn.replace(0, np.nan)
+        cols["simn_" + c] = tn
+        cols["simavg_" + c] = avg
+        cols["sim_" + c] = ((avg - rows[c + "_g"]) * tn / (tn + TIER_SHRINK)).fillna(0)
+    return pd.concat([rows, pd.DataFrame(cols, index=rows.index)], axis=1)
 
 
 def load_season(season, games, src=None):
@@ -371,19 +424,26 @@ def load_season(season, games, src=None):
 # kept only where it improved held-out accuracy at every milestone (receiving, receptions,
 # rush + rec and passing TDs saw no gain or a loss). vac_ inputs went in the same way; they hurt
 # the QB stats. Share trends (_sh3) and red zone usage didn't help yardage, so they're display only.
+# "schedule" adds the schedule-adjusted average (adj_), which helped carries and the receiving
+# stats on 2022-24; it did nothing for rushing yards and hurt QB stats. Averages against
+# similar-rank defenses (sim_) and plain strength of schedule (sos_) didn't help any stat.
 MARKETS = {
     "rush_yds": {"label": "Rushing yards", "stat": "rushing_yards", "pos": ["RB", "QB"], "lines": [40, 60, 80],
                  "matchup": True,
                  "feats": ["rushing_yards_g", "rushing_yards_l3", "carries_g", "carries_sh", "vac_carries"]},
     "carries": {"label": "Rush attempts", "stat": "carries", "pos": ["RB", "QB"], "lines": [12, 15, 18],
                 "matchup": True,
+                 "schedule": True,
                  "feats": ["carries_g", "carries_l3", "carries_sh", "vac_carries"]},
     "rec_yds": {"label": "Receiving yards", "stat": "receiving_yards", "pos": ["WR", "TE", "RB"], "lines": [40, 60, 80],
-                "feats": ["receiving_yards_g", "receiving_yards_l3", "targets_g", "targets_sh", "vac_targets"]},
+                "schedule": True,
+                 "feats": ["receiving_yards_g", "receiving_yards_l3", "targets_g", "targets_sh", "vac_targets"]},
     "receptions": {"label": "Receptions", "stat": "receptions", "pos": ["WR", "TE", "RB"], "lines": [4, 5, 6],
-                   "feats": ["receptions_g", "receptions_l3", "targets_g", "targets_sh", "vac_targets"]},
+                   "matchup": True, "schedule": True,
+                 "feats": ["receptions_g", "receptions_l3", "targets_g", "targets_sh", "vac_targets"]},
     "scrimmage": {"label": "Rush + rec yards", "stat": "scrimmage_yards", "pos": ["RB", "WR", "TE"], "lines": [60, 80, 100],
-                  "feats": ["scrimmage_yards_g", "scrimmage_yards_l3", "carries_g", "targets_g", "vac_carries", "vac_targets"]},
+                  "matchup": True, "schedule": True,
+                 "feats": ["scrimmage_yards_g", "scrimmage_yards_l3", "carries_g", "targets_g", "vac_carries", "vac_targets"]},
     "td": {"label": "Anytime TD", "stat": "rr_tds", "pos": ["RB", "WR", "TE"], "lines": [1],
            "feats": ["rr_tds_g", "rz_opp_g", "i10_opp_g", "rz_opp_sh", "i10_opp_sh", "carries_g", "targets_g"]},
     "long_rush": {"label": "Longest rush", "stat": "long_rush", "pos": ["RB", "QB"], "lines": [10, 15, 20],
@@ -415,7 +475,8 @@ def model_inputs(market):
     m = MARKETS[market]
     flags = ["is" + p for p in m["pos"][1:]]
     feats = [BLENDED.get(c, c) for c in m["feats"]]
-    matchup = (["dvp_" + m["stat"]] if m.get("matchup") else []) + (["dvpv_" + m["stat"]] if m.get("venue") else [])
+    matchup = (["dvp_" + m["stat"]] if m.get("matchup") else []) + (["dvpv_" + m["stat"]] if m.get("venue") else []) + \
+        (["adj_" + m["stat"]] if m.get("schedule") else [])
     return feats + ["snap_last", "gp_c", "missed"] + GAME + flags + matchup
 
 

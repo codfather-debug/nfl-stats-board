@@ -175,17 +175,29 @@ def game_logs(pg):
     return out
 
 
-def score(rows, model, slate_by_team, logs):
+def tier_splits(played):
+    """Per player and stat: [average, games] against soft, mid and tough defenses (by rank going in)."""
+    out = {}
+    for c in F.SOS_STATS:
+        g = played[played["tier_" + c] != ""].groupby(["pid", "tier_" + c])[c].agg(["mean", "size"])
+        for (pid, tier), r in g.iterrows():
+            out.setdefault(pid, {}).setdefault(c, {})[tier] = [round(float(r["mean"]), 1), int(r["size"])]
+    return out
+
+
+def score(rows, model, slate_by_team, logs, tiers):
     """One record per player on the slate with inputs, probabilities, tested rates and game log."""
     inputs = sorted({f for m in model["markets"].values() for f in m["inputs"]} | set(SHOWN) |
                     {f"prev_{m['stat']}" for m in model["markets"].values()} |
+                    {f"{k}_{c}" for k in ("sos", "adj") for c in F.SOS_STATS} |
                     {f"{m['stat']}_g" for m in model["markets"].values()} | {f"{m['stat']}_l3" for m in model["markets"].values()})
     players = []
     for r in rows.itertuples(index=False):
         x = {k: (None if pd.isna(getattr(r, k)) else round(float(getattr(r, k)), 4)) for k in inputs}
         game = slate_by_team[r.team]
         p = {"player": r.player, "key": r.key, "team": r.team, "opp": game["opp"], "pos": r.pos, "x": x, "plays": {},
-             "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, []), "proj": {}}
+             "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, []), "proj": {},
+             "tiers": tiers.get(r.pid, {}), "tierNow": {c: getattr(r, "tier_" + c) for c in F.SOS_STATS}}
         for mk, m in model["markets"].items():
             if r.pos not in m["pos"] or (r.gp < model["minGames"] and r.prev_gp < model["minPrevGames"]):
                 continue
@@ -285,8 +297,9 @@ def main(src):
         up["status"] = [status_for(t, k, inj, roster[t]) for t, k in zip(up.team, up.key)]
         # Ruled-out teammates free up carries and targets for the rest.
         rows = F.add_features(pg, up, ruled_out(pg, up, week))
+        tiers = tier_splits(rows[rows.played & (rows.season == SEASON)])
         rows = rows[~rows.played & (rows.season == SEASON) & (rows.week == week)]
-        players = score(rows, model, slate_by_team, game_logs(pg[pg.season == SEASON]))
+        players = score(rows, model, slate_by_team, game_logs(pg[pg.season == SEASON]), tiers)
         if len(players) < 50:
             sys.exit(f"Only {len(players)} players scored for week {week}; leaving the last page live.")
         data["slate"], data["players"] = games_week, players

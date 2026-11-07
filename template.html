@@ -277,6 +277,7 @@ function card(x) {
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
     ${histLine(p, m, x.line)}
     ${muLine(p, m)}
+    ${scheduleLine(p, m)}
     ${roleLine(p, x.mk)}
     <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}tier tested on ${t.n} games</div>
     ${splitLine(p, m, g)}
@@ -334,6 +335,19 @@ function gameLog(p, mk) {
   return `<details class="log"><summary>Game log</summary><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Opp</th>${cols.map((c) => `<th>${lbl(c)}</th>`).join("")}<th>Snap</th></tr></thead><tbody>
     ${[...p.log].reverse().map((r) => `<tr><td class="t">${r[LOG.week]}</td><td class="t">${r[LOG.home] ? "" : "@"}${esc(r[LOG.opp])}</td>${cols.map((c) => `<td>${num(r[LOG[c]], 0)}</td>`).join("")}<td>${pct(r[LOG.snap])}</td></tr>`).join("")}
   </tbody></table></details>`;
+}
+const TIER_LABEL = { soft: "soft (1st–10th)", mid: "middle (11th–22nd)", tough: "tough (23rd–32nd)" };
+function scheduleLine(p, m) {
+  const sos = p.x["sos_" + m.stat], adj = p.x["adj_" + m.stat], tiers = p.tiers[m.stat];
+  if (sos == null || !p.x.gp) return "";
+  const d = Math.round((sos - 1) * 100), word = d >= 8 ? "soft" : d <= -8 ? "tough" : "about average";
+  const lines = [`Schedule so far: ${word} · defenses faced allow ${d >= 0 ? "+" : ""}${d}% ${STAT_SHORT_COL[m.stat]} vs avg · adjusted avg <b>${num(adj)}</b>`];
+  if (tiers) {
+    const now = p.tierNow[m.stat];
+    const parts = ["soft", "mid", "tough"].filter((k) => tiers[k]).map((k) => `${k === now ? "<b>" : ""}${k} ${num(tiers[k][0])} <span class="count">(${tiers[k][1]}g)</span>${k === now ? "</b>" : ""}`);
+    if (parts.length) lines.push(`Vs defenses ranked ${parts.join(" · ")}${now ? ` · this week: ${TIER_LABEL[now]}` : ""}`);
+  }
+  return lines.map((l) => `<div class="mu">${l}</div>`).join("");
 }
 function muLine(p, m) {
   const u = matchup(p, m.stat);
@@ -410,7 +424,7 @@ function viewDefense() {
 
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, receptions, rush + rec, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
     <ul class="notes">
       <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
       <li><b>Sample size.</b> Each held-out tier rests on 40 to over a thousand games. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
@@ -418,6 +432,7 @@ function viewBacktest() {
       <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
       <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season or ${MODEL.minPrevGames}+ last season, and must be on nflverse's active roster (IR and practice squad are left off). A traded player shows with the new team using numbers from the old one. A backup QB stepping in has little to go on, and receivers aren't adjusted when their starting QB is out.</li>
+      <li><b>Strength of schedule.</b> Each card shows how soft or tough the defenses a player has faced were, and a schedule-adjusted average (each game scaled by how much that defense allows to the position). The adjusted average helped a little for rush attempts, receiving yards, receptions and rush + rec, so those models use it. A player's average against similar-rank defenses (soft, middle, tough) is shown too, but it added nothing in testing (each bucket has only 1 to 4 games), so the projections don't use it.</li>
       <li><b>Opponent home/away and history.</b> In testing, what a defense allows at home vs. on the road helped only passing yards and completions, so only those models use it; cards show it as context for every stat. A player's own history against this opponent (usually 1–3 past games) added nothing for RB, WR or TE stats, so it's left out.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
