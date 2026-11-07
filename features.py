@@ -14,6 +14,7 @@ import pandas as pd
 NFLVERSE = "https://github.com/nflverse/nflverse-data/releases/download"
 GAMES_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 POSITIONS = ("QB", "RB", "WR", "TE")
+POS_ALIASES = {"FB": "RB", "HB": "RB"}
 # Outcome columns taken from the weekly stats file.
 STATS = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards", "rushing_tds",
          "receptions", "targets", "receiving_yards", "receiving_tds"]
@@ -93,7 +94,8 @@ def match_stats(snaps, stats):
     (suffixes, accents, Bam vs Zonovan), so fall back to a unique same-team surname."""
     st = stats[stats.season_type == "REG"].copy()
     st["key"] = st.player_display_name.map(norm_name)
-    st = st.groupby(["week", "team", "key"], as_index=False).agg({**{c: "sum" for c in STATS}, "player_id": "first"})
+    st = st.groupby(["week", "team", "key"], as_index=False).agg({**{c: "sum" for c in STATS}, "player_id": "first",
+                                                                   "position": "first"}).rename(columns={"position": "stats_pos"})
     out = snaps.merge(st, how="left", on=["week", "team", "key"], indicator=True)
     miss = out["_merge"] == "left_only"
     st["sur"] = st.key.map(surname)
@@ -103,7 +105,7 @@ def match_stats(snaps, stats):
     missing = list(zip(out.loc[miss, "week"], out.loc[miss, "team"], out.loc[miss, "key"].map(surname)))
     for i, k in zip(out.index[miss], missing):
         if missing.count(k) == 1 and k in unique.index and (k[0], k[1], unique.loc[k, "key"]) not in taken:
-            out.loc[i, STATS + ["player_id"]] = unique.loc[k, STATS + ["player_id"]].values
+            out.loc[i, STATS + ["player_id", "stats_pos"]] = unique.loc[k, STATS + ["player_id", "stats_pos"]].values
     out[STATS] = out[STATS].fillna(0)
     # Snap counts can post before box scores; leave out games whose box score isn't published yet.
     boxed = set(zip(st.week, st.team))
@@ -113,11 +115,15 @@ def match_stats(snaps, stats):
 def player_games(season, snaps, stats, pbp):
     """Every game an offensive skill player took a snap in, with the box score and play-by-play usage."""
     s = snaps[(snaps.game_type == "REG") & (snaps.offense_snaps > 0)].copy()
-    s["position"] = s.position.replace({"FB": "RB"})
+    # Some teams' snap counts call running backs HB (Cincinnati in 2025-26).
+    s["position"] = s.position.replace(POS_ALIASES)
     s = s[s.position.isin(POSITIONS)]
     s["key"] = s.player.map(norm_name)
     s = s[["week", "team", "player", "pfr_player_id", "position", "key", "offense_pct"]]
     s = match_stats(s, stats)
+    # The stats file's position is the league's roster listing; prefer it to the snap file's.
+    listed = s.stats_pos.replace(POS_ALIASES)
+    s["position"] = np.where(listed.isin(POSITIONS), listed, s.position)
     s = s.merge(pbp_usage(pbp), how="left", on=["week", "team", "player_id"])
     s[PBP] = s[PBP].fillna(0).clip(lower=0)
     s["season"] = season
@@ -176,9 +182,54 @@ def add_features(pg, upcoming=None, out=()):
         prior = [w for w in team_weeks.get((r.season, r.team), []) if w < r.week][-2:]
         recent.append(any((r.season, r.team, r.pid, w) in seen for w in prior))
     rows["recent"] = recent
+    rows = add_missed(rows, pg)
+    rows = add_prev(rows)
     for p in POSITIONS:
         rows["is" + p] = (rows.pos == p).astype(int)
     return add_matchup(rows, pg)
+
+
+def add_missed(rows, pg):
+    """missed: the team's games since the player last played this season (all of them if not yet).
+    Lets the model tell a player back from injury, or a benched one, from a steady starter."""
+    team_weeks = pg.groupby(["season", "team"]).week.apply(lambda w: sorted(set(w))).to_dict()
+    played_weeks = pg.groupby(["season", "pid"]).week.apply(lambda w: sorted(set(w))).to_dict()
+    out = []
+    for r in rows[["season", "team", "pid", "week"]].itertuples(index=False):
+        before = [w for w in played_weeks.get((r.season, r.pid), []) if w < r.week]
+        last = before[-1] if before else 0
+        out.append(sum(1 for w in team_weeks.get((r.season, r.team), []) if last < w < r.week))
+    rows["missed"] = out
+    return rows
+
+
+# Last season, carried into this one: per-game averages over games played, and the share of team
+# carries and targets. b_<stat> blends it with this season, leaning on last season while gp is small.
+PREV = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
+        "targets", "receiving_yards", "scrimmage_yards", "rr_tds", "rz_opp", "i10_opp", "long_rush", "long_rec"]
+PRIOR_WEIGHT = 3  # Last season counts like this many games of this one.
+MIN_PREV_GAMES = 4
+
+
+def add_prev(rows):
+    p = rows[rows.played]
+    prev = p.groupby(["season", "pid"])[PREV].mean().add_prefix("prev_")
+    prev["prev_gp"] = p.groupby(["season", "pid"]).size()
+    for c in ("carries", "targets"):
+        prev[f"prev_{c}_sh"] = p.groupby(["season", "pid"])[c].sum() / p.groupby(["season", "pid"])["t_" + c].sum().replace(0, np.nan)
+    prev = prev.reset_index()
+    prev["season"] += 1
+    rows = rows.drop(columns=[c for c in rows if c.startswith("prev_")]).merge(prev, how="left", on=["season", "pid"])
+    rows["prev_gp"] = rows.prev_gp.fillna(0)
+    has = rows.prev_gp >= MIN_PREV_GAMES
+    w = np.where(has, PRIOR_WEIGHT, 0)
+    for c in PREV:
+        now = rows[c + "_g"].fillna(0) * rows.gp
+        rows["b_" + c] = ((now + w * rows["prev_" + c].fillna(0)) / (rows.gp + w)).fillna(0)
+    for c in ("carries", "targets"):
+        rows[f"b_{c}_sh"] = ((rows[c + "_sh"] * rows.gp + w * rows[f"prev_{c}_sh"].fillna(0)) / (rows.gp + w)).fillna(0)
+    rows["gp_c"] = rows.gp.clip(upper=8)
+    return rows
 
 
 SPLIT_STATS = ["completions", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
@@ -252,7 +303,10 @@ def allowed_by_game(pg):
     # A position with no snaps against a defense in a game it played allowed zero, not missing.
     full = pd.MultiIndex.from_tuples([(s, w, d, p) for s, w, d in games.itertuples(index=False) for p in POSITIONS],
                                      names=["season", "week", "opp", "pos"])
-    return out.reindex(full, fill_value=0).reset_index().rename(columns={"opp": "defense"})
+    out = out.reindex(full, fill_value=0).reset_index()
+    # dhome: the defense was the home team.
+    venue = pg.groupby(["season", "week", "opp"]).home.first().rsub(1).rename("dhome").reset_index()
+    return out.merge(venue, on=["season", "week", "opp"]).rename(columns={"opp": "defense"})
 
 
 def defense_table(pg, season, week):
@@ -271,22 +325,34 @@ def defense_table(pg, season, week):
     return per
 
 
+VENUE_SHRINK = 2  # A defense's home or road split counts fully only after a few such games.
+
+
 def add_matchup(rows, pg):
-    """dvp_<stat>: the opponent's allowed per game to the player's position, minus league average, before this week."""
+    """dvp_<stat>: the opponent's allowed per game to the player's position, minus league average, before this week.
+    dvpv_<stat>: the same in the opponent's home games only (or road games only), matching this game,
+    shrunk toward zero when the defense has played few such games."""
     a = allowed_by_game(pg)
-    keys = rows[["season", "week"]].drop_duplicates()
-    parts = []
-    for s, w in keys.itertuples(index=False):
+    overall, venue = [], []
+    for s, w in rows[["season", "week"]].drop_duplicates().itertuples(index=False):
         prior = a[(a.season == s) & (a.week < w)]
         if not len(prior):
             continue
-        per = prior.groupby(["defense", "pos"])[ALLOWED].mean()
         lg = prior.groupby("pos")[ALLOWED].mean()
+        per = prior.groupby(["defense", "pos"])[ALLOWED].mean()
         diff = (per - lg.reindex(per.index.get_level_values("pos")).values).add_prefix("dvp_")
         diff["dgp"] = prior.groupby(["defense", "pos"]).size()
-        parts.append(diff.reset_index().assign(season=s, week=w))
-    dvp = pd.concat(parts, ignore_index=True).rename(columns={"defense": "opp"})
-    return rows.merge(dvp, how="left", on=["season", "week", "opp", "pos"])
+        overall.append(diff.reset_index().assign(season=s, week=w))
+        pv = prior.groupby(["defense", "pos", "dhome"])[ALLOWED].mean()
+        n = prior.groupby(["defense", "pos", "dhome"]).size()
+        dv = (pv - lg.reindex(pv.index.get_level_values("pos")).values).mul(n / (n + VENUE_SHRINK), axis=0)
+        venue.append(dv.add_prefix("dvpv_").reset_index().assign(season=s, week=w))
+    rows = rows.merge(pd.concat(overall, ignore_index=True).rename(columns={"defense": "opp"}),
+                      how="left", on=["season", "week", "opp", "pos"])
+    # The defense is at home when the player is on the road.
+    rows["dhome"] = 1 - rows.home
+    return rows.merge(pd.concat(venue, ignore_index=True).rename(columns={"defense": "opp"}),
+                      how="left", on=["season", "week", "opp", "pos", "dhome"])
 
 
 def load_season(season, games, src=None):
@@ -325,12 +391,12 @@ MARKETS = {
     "long_rec": {"label": "Longest catch", "stat": "long_rec", "pos": ["WR", "TE", "RB"], "lines": [15, 20, 25],
                  "feats": ["long_rec_g", "long_rec_l3", "targets_g", "receptions_g", "targets_sh", "vac_targets"]},
     "pass_yds": {"label": "Passing yards", "stat": "passing_yards", "pos": ["QB"], "lines": [225, 250],
-                 "matchup": True,
+                 "matchup": True, "venue": True,
                  "feats": ["passing_yards_g", "passing_yards_l3", "attempts_g"]},
     "pass_tds": {"label": "Passing TDs", "stat": "passing_tds", "pos": ["QB"], "lines": [2],
                  "feats": ["passing_tds_g", "passing_yards_g", "attempts_g"]},
     "completions": {"label": "Completions", "stat": "completions", "pos": ["QB"], "lines": [20, 22],
-                    "matchup": True,
+                    "matchup": True, "venue": True,
                  "feats": ["completions_g", "completions_l3", "attempts_g"]},
 }
 # Player stats only: the betting line (projected team points, spread) is left out by choice.
@@ -340,13 +406,20 @@ GAME = []
 MIN_GAMES = 2
 
 
+BLENDED = {f"{c}_g": f"b_{c}" for c in PREV} | {"carries_sh": "b_carries_sh", "targets_sh": "b_targets_sh"}
+
+
 def model_inputs(market):
+    """Season averages and shares are swapped for their blends with last season, so early weeks and
+    players back from injury still have a baseline; gp_c and missed say how much this season counts."""
     m = MARKETS[market]
     flags = ["is" + p for p in m["pos"][1:]]
-    return m["feats"] + ["snap_last"] + GAME + flags + (["dvp_" + m["stat"]] if m.get("matchup") else [])
+    feats = [BLENDED.get(c, c) for c in m["feats"]]
+    matchup = (["dvp_" + m["stat"]] if m.get("matchup") else []) + (["dvpv_" + m["stat"]] if m.get("venue") else [])
+    return feats + ["snap_last", "gp_c", "missed"] + GAME + flags + matchup
 
 
 def eligible(rows, market):
-    """Players the board would list: enough earlier games and a recent role."""
+    """Players the board would list: two games this season, or four last season to lean on."""
     m = MARKETS[market]
-    return rows[rows.pos.isin(m["pos"]) & (rows.gp >= MIN_GAMES) & rows.recent]
+    return rows[rows.pos.isin(m["pos"]) & ((rows.gp >= MIN_GAMES) | (rows.prev_gp >= MIN_PREV_GAMES))]

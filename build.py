@@ -112,18 +112,57 @@ def tier_for(tiers, p):
     return [t for t in tiers if p >= t["min"]][-1]
 
 
-def candidates(pg, teams, week, games):
-    """This week's row for every player whose latest game this season was for a team on the slate."""
-    last = pg.sort_values("week").groupby("pid").tail(1)
-    last = last[last.team.isin(teams)]
-    up = last[["season", "team", "pid", "player", "pos", "key"]].assign(week=week)
+def roster_url(season):
+    return f"{F.NFLVERSE}/weekly_rosters/roster_weekly_{season}.csv"
+
+
+def candidates(pg, teams, week, games, src):
+    """This week's row for every active skill player on a team on the slate.
+
+    Uses nflverse's weekly roster (latest week published): status ACT only, so IR and practice squad
+    are out, and a traded player shows with the new team. If the roster can't be read, falls back to
+    players who took a snap for the team in one of its last four games.
+    """
+    names = pg.sort_values(["season", "week"]).groupby("pid").player.last()
+    try:
+        r = F.read_csv(f"{src}/roster{SEASON}.csv" if src else roster_url(SEASON))
+        r = r[r.week == r.week[r.week <= week].max()]
+        r = r[(r.status == "ACT") & r.team.isin(teams) & r.pfr_id.notna()].copy()
+        r["pos"] = r.position.replace(F.POS_ALIASES)
+        r = r[r.pos.isin(F.POSITIONS)]
+        up = pd.DataFrame({"season": SEASON, "team": r.team.values, "pid": r.pfr_id.values, "pos": r.pos.values,
+                           "player": [names.get(p, n) for p, n in zip(r.pfr_id, r.full_name)]})
+        print(f"Roster: week {int(r.week.max())}, {len(up)} active skill players")
+    except Exception as e:
+        print(f"Roster unavailable ({e}); using recent snaps")
+        cur = pg[pg.season == SEASON]
+        recent_weeks = cur.groupby("team").week.apply(lambda w: set(sorted(set(w))[-4:])).to_dict()
+        cur = cur[[w in recent_weeks.get(t, ()) for t, w in zip(cur.team, cur.week)]]
+        last = cur.sort_values("week").groupby("pid").tail(1)
+        up = last[last.team.isin(teams)][["season", "team", "pid", "player", "pos"]].copy()
+    up["key"] = up.player.map(F.norm_name)
+    up = up.drop_duplicates("pid").assign(week=week)
     lines = F.team_lines(games, SEASON)
     return up.merge(lines[["week", "team", "opp", "home", "indoor", "turf", "game_id"]], how="left", on=["week", "team"])
 
 
+def ruled_out(pg, up, week):
+    """Regulars (a snap in one of the team's last two games) who won't play: off the active roster or
+    listed Out, Doubtful, IR or suspended. Feeds the teammates-out inputs."""
+    cur = pg[pg.season == SEASON]
+    active = {p for p, s in zip(up.pid, up.status) if s not in UNAVAILABLE}
+    out = set()
+    for team in set(up.team):
+        weeks = sorted(set(cur[cur.team == team].week))[-2:]
+        for p in set(cur[(cur.team == team) & cur.week.isin(weeks)].pid):
+            if p not in active:
+                out.add((SEASON, week, team, p))
+    return out
+
+
 # Shown on the page but not model inputs (or inputs some models skip).
-SHOWN = ["gp", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g", "rz_opp_sh",
-         "vac_carries", "vac_targets"]
+SHOWN = ["gp", "prev_gp", "missed", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g",
+         "rz_opp_sh", "vac_carries", "vac_targets"]
 # Each player's game log, for hit history. Keep in step with LOG in template.html.
 LOG = ["week", "opp", "home", "indoor", "turf", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
        "long_rec", "rr_tds", "rz_opp", "completions", "attempts", "passing_yards", "passing_tds"]
@@ -139,6 +178,7 @@ def game_logs(pg):
 def score(rows, model, slate_by_team, logs):
     """One record per player on the slate with inputs, probabilities, tested rates and game log."""
     inputs = sorted({f for m in model["markets"].values() for f in m["inputs"]} | set(SHOWN) |
+                    {f"prev_{m['stat']}" for m in model["markets"].values()} |
                     {f"{m['stat']}_g" for m in model["markets"].values()} | {f"{m['stat']}_l3" for m in model["markets"].values()})
     players = []
     for r in rows.itertuples(index=False):
@@ -147,7 +187,7 @@ def score(rows, model, slate_by_team, logs):
         p = {"player": r.player, "key": r.key, "team": r.team, "opp": game["opp"], "pos": r.pos, "x": x, "plays": {},
              "regular": bool(r.recent), "status": r.status, "log": logs.get(r.pid, []), "proj": {}}
         for mk, m in model["markets"].items():
-            if r.pos not in m["pos"] or r.gp < model["minGames"] or not r.recent:
+            if r.pos not in m["pos"] or (r.gp < model["minGames"] and r.prev_gp < model["minPrevGames"]):
                 continue
             if "proj" in m:
                 p["proj"][mk] = round(project(m["proj"]["coef"], x), 1)
@@ -162,11 +202,19 @@ def score(rows, model, slate_by_team, logs):
 def defenses(pg, week):
     """Allowed per game to each position before this week, with league average and rank (1 = allows most)."""
     t = F.defense_table(pg, SEASON, week)
+    a = F.allowed_by_game(pg)
+    a = a[(a.season == SEASON) & (a.week < week)]
+    venue = a.groupby(["defense", "pos", "dhome"])[F.ALLOWED].mean()
+    venue_n = a.groupby(["defense", "pos", "dhome"]).size()
     out = []
     for r in t.to_dict("records"):
-        row = {"team": r["defense"], "pos": r["pos"], "games": int(r["games"])}
+        d, p = r["defense"], r["pos"]
+        row = {"team": d, "pos": p, "games": int(r["games"]),
+               "gamesHome": int(venue_n.get((d, p, 1), 0)), "gamesRoad": int(venue_n.get((d, p, 0), 0))}
         for c in F.ALLOWED:
-            row[c] = [round(r[c], 1), round(r[c + "_lg"], 1), int(r[c + "_rank"])]
+            at = lambda h: round(float(venue.loc[(d, p, h), c]), 1) if (d, p, h) in venue.index else None
+            # [per game, league avg, rank, at home, on the road]
+            row[c] = [round(r[c], 1), round(r[c + "_lg"], 1), int(r[c + "_rank"]), at(1), at(0)]
         out.append(row)
     return out
 
@@ -219,13 +267,14 @@ def main(src):
     with open(os.path.join(HERE, "model.json"), encoding="utf-8") as f:
         model = json.load(f)
     week = upcoming_week(games)
-    pg = F.load_season(SEASON, games, src)
+    # Last season too: it feeds the carried-over averages.
+    pg = pd.concat([F.load_season(s, games, src) for s in (SEASON - 1, SEASON)], ignore_index=True)
     history = load_history()
     data = {"season": SEASON, "week": week, "builtAt": stamp(now), "model": model, "slate": [], "players": []}
     if week:
         games_week = slate(games, week)
         slate_by_team = {g["team"]: g for g in games_week}
-        up = candidates(pg, set(slate_by_team), week, games)
+        up = candidates(pg, set(slate_by_team), week, games, src)
         try:
             inj = injuries()
             data["injuriesAt"] = stamp(now)
@@ -235,14 +284,13 @@ def main(src):
         roster = up.groupby("team").key.apply(list).to_dict()
         up["status"] = [status_for(t, k, inj, roster[t]) for t, k in zip(up.team, up.key)]
         # Ruled-out teammates free up carries and targets for the rest.
-        out = {(SEASON, week, r.team, r.pid) for r in up.itertuples() if r.status in UNAVAILABLE}
-        rows = F.add_features(pg, up, out)
-        rows = rows[~rows.played & (rows.week == week)]
-        players = score(rows, model, slate_by_team, game_logs(pg))
+        rows = F.add_features(pg, up, ruled_out(pg, up, week))
+        rows = rows[~rows.played & (rows.season == SEASON) & (rows.week == week)]
+        players = score(rows, model, slate_by_team, game_logs(pg[pg.season == SEASON]))
         if len(players) < 50:
             sys.exit(f"Only {len(players)} players scored for week {week}; leaving the last page live.")
         data["slate"], data["players"] = games_week, players
-        data["defenses"] = defenses(pg, week)
+        data["defenses"] = defenses(pg[pg.season == SEASON], week)
         data["logCols"] = LOG
         if data["injuriesAt"]:
             snapshot(history, players, slate_by_team, week, now)
@@ -254,6 +302,10 @@ def main(src):
     with open(HISTORY_PATH, "w", encoding="utf-8") as f:
         json.dump(history, f, separators=(",", ":"), ensure_ascii=False)
     data["results"] = history["plays"]
+    # Inputs go out as arrays against one key list, which keeps the page about half the size.
+    data["xCols"] = sorted({k for p in data["players"] for k in p["x"]})
+    for p in data["players"]:
+        p["x"] = [None if p["x"].get(k) is None else round(p["x"][k], 3) for k in data["xCols"]]
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
     with open(os.path.join(HERE, "template.html"), encoding="utf-8") as f:
         html = f.read()

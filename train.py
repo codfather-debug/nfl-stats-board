@@ -4,8 +4,10 @@
 Usage: train.py [data_dir]   (data_dir holds snapsYYYY.csv, statsYYYY.csv, pbpYYYY.csv.gz and games.csv; else downloads)
 Needs numpy, pandas and scikit-learn.
 
-Tier hit rates are graded walk-forward only: 2024 predicts 2025, then 2024-25 predicts 2026.
-The live model is refit on every season, but the board shows these held-out rates, not its raw output.
+Tier hit rates are graded walk-forward only: each season from 2022 on is predicted by a model trained
+on the seasons before it (2020 through the year before). Inputs were chosen on the 2022-24 folds, so
+2025-26 are the cleanest check. The live model is refit on every season, but the board shows these
+held-out rates, not its raw output.
 """
 import datetime
 import json
@@ -21,8 +23,8 @@ from sklearn.preprocessing import StandardScaler
 import features as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SEASONS = (2024, 2025, 2026)
-FOLDS = (((2024,), 2025), ((2024, 2025), 2026))
+SEASONS = tuple(range(2020, 2027))
+FOLDS = tuple((tuple(range(2020, y)), y) for y in range(2022, 2027))
 EDGES = [0, .2, .3, .4, .5, .6, .7, .8, .9, 1]
 MIN_TIER = 40  # Smaller bins merge into the one below, so every tier rate rests on 40+ games.
 
@@ -103,7 +105,7 @@ def main(src):
     pg = pd.concat([F.load_season(s, games, src) for s in SEASONS], ignore_index=True)
     rows = F.add_features(pg)
     rows = rows[rows.played]
-    model = {"trained": datetime.date.today().isoformat(), "seasons": list(SEASONS), "minGames": F.MIN_GAMES, "markets": {}}
+    model = {"trained": datetime.date.today().isoformat(), "seasons": list(SEASONS), "minGames": F.MIN_GAMES, "minPrevGames": F.MIN_PREV_GAMES, "markets": {}}
     for key, m in F.MARKETS.items():
         e = F.eligible(rows, key)
         inputs = F.model_inputs(key)

@@ -116,6 +116,7 @@ details.log table.data { margin-top: 6px; font-size: 13px; } details.log table.d
 <script>
 const DATA = /*__DATA__*/null;
 const MODEL = DATA.model, MARKETS = MODEL.markets;
+for (const p of DATA.players) if (Array.isArray(p.x)) p.x = Object.fromEntries(DATA.xCols.map((k, i) => [k, p.x[i]]));
 const UNAVAILABLE = new Set(["Out", "Doubtful", "Injured Reserve", "Suspension"]);
 const TEAMS = { // Keep in step with TEAMS in build.py.
   Cardinals: "ARI", Falcons: "ATL", Ravens: "BAL", Bills: "BUF", Panthers: "CAR", Bears: "CHI", Bengals: "CIN", Browns: "CLE",
@@ -277,7 +278,7 @@ function card(x) {
     ${histLine(p, m, x.line)}
     ${muLine(p, m)}
     ${roleLine(p, x.mk)}
-    <div class="l3">${projText(p, x.mk)}Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · tier tested on ${t.n} games</div>
+    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}tier tested on ${t.n} games</div>
     ${splitLine(p, m, g)}
     ${gameLog(p, x.mk)}
   </div>`;
@@ -316,6 +317,7 @@ function roleLine(p, mk) {
   if (showC) bits.push(`Carry share <b>${pct(x.carries_sh)}</b> (last 3: ${pct(x.carries_sh3)}${trend(x.carries_sh3, x.carries_sh)})`);
   if (showT) bits.push(`Target share <b>${pct(x.targets_sh)}</b> (last 3: ${pct(x.targets_sh3)}${trend(x.targets_sh3, x.targets_sh)})`);
   if (mk === "td") bits.push(`Red zone <b>${num(x.rz_opp_g)}</b>/g · inside 10 <b>${num(x.i10_opp_g)}</b>/g · ${pct(x.rz_opp_sh)} of team RZ`);
+  if (x.missed > 0) bits.push(`<span class="flag">Back</span> after missing ${x.missed} game${x.missed === 1 ? "" : "s"} · numbers are from before`);
   const vc = x.vac_carries || 0, vt = x.vac_targets || 0;
   if ((showC && vc >= 0.05) || (showT && vt >= 0.05))
     bits.push(`<span class="soft">Teammates out:</span> ${[showC && vc >= 0.05 ? `${pct(vc)} of carries` : "", showT && vt >= 0.05 ? `${pct(vt)} of targets` : ""].filter(Boolean).join(", ")} open up`);
@@ -336,7 +338,10 @@ function gameLog(p, mk) {
 function muLine(p, m) {
   const u = matchup(p, m.stat);
   if (!u) return "";
-  return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span></div>`;
+  const g = gameOf(p.team), d = DEF[`${p.opp}|${p.pos}`], atHome = !g.home;
+  const v = d[m.stat][atHome ? 3 : 4], n = atHome ? d.gamesHome : d.gamesRoad;
+  const venue = v == null ? "" : ` · <b>${num(v)}</b> ${atHome ? "at home" : "on the road"} <span class="count">(${n}g)</span>`;
+  return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span>${venue}</div>`;
 }
 const STAT_SHORT_COL = { rushing_yards: "rush yds", carries: "carries", receiving_yards: "rec yds", receptions: "rec", scrimmage_yards: "rush+rec yds",
   passing_yards: "pass yds", passing_tds: "pass TD", completions: "comp", rr_tds: "TDs" };
@@ -405,14 +410,15 @@ function viewDefense() {
 
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, and snap share in the player's last game. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
     <ul class="notes">
       <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
-      <li><b>Sample size.</b> Each held-out tier rests on 40 to a few hundred games. QB stats rest on 658 QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
-      <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at these same seasons. That will flatter the results a little. The forward Results page is the honest check.</li>
+      <li><b>Sample size.</b> Each held-out tier rests on 40 to over a thousand games. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
+      <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at past seasons. New inputs were chosen on 2022–24 only, so the 2025–26 column is the fairest check; the forward Results page is the honest one.</li>
       <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
       <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
-      <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season and a snap in one of the team's last two games. Weeks 1–2 and newly promoted starters (a backup QB stepping in, say) are thin or missing. A traded player is skipped until they have played for the new team.</li>
+      <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season or ${MODEL.minPrevGames}+ last season, and must be on nflverse's active roster (IR and practice squad are left off). A traded player shows with the new team using numbers from the old one. A backup QB stepping in has little to go on, and receivers aren't adjusted when their starting QB is out.</li>
+      <li><b>Opponent home/away and history.</b> In testing, what a defense allows at home vs. on the road helped only passing yards and completions, so only those models use it; cards show it as context for every stat. A player's own history against this opponent (usually 1–3 past games) added nothing for RB, WR or TE stats, so it's left out.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
       <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the tested rate already accounts for the player's averages.</li>
@@ -426,9 +432,9 @@ function viewBacktest() {
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
       <div class="panel"><h3>${esc(m.label)} ${line}+</h3>
       <span class="count">${s.heldOut.n} held-out games · ${pct(s.heldOut.base)} cleared it overall</span>
-      <table class="data"><thead><tr><th class="t">Model says</th><th>Games</th><th>Hit</th><th>2025</th><th>2026</th></tr></thead><tbody>
-      ${[...s.tiers].reverse().map((t) => { const yr = (y) => t.bySeason[y] ? `${pct(t.bySeason[y][0] / t.bySeason[y][1])} <span class="count">(${t.bySeason[y][1]})</span>` : "–";
-        return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n}</td><td class="r">${pct(t.hit)}</td><td>${yr("2025")}</td><td>${yr("2026")}</td></tr>`; }).join("")}
+      <table class="data"><thead><tr><th class="t">Model says</th><th>Games</th><th>Hit</th><th>2025–26 only</th></tr></thead><tbody>
+      ${[...s.tiers].reverse().map((t) => { const h = ["2025", "2026"].reduce((a, y) => t.bySeason[y] ? [a[0] + t.bySeason[y][0], a[1] + t.bySeason[y][1]] : a, [0, 0]);
+        return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n}</td><td class="r">${pct(t.hit)}</td><td>${h[1] ? `${pct(h[0] / h[1])} <span class="count">(${h[1]})</span>` : "–"}</td></tr>`; }).join("")}
       </tbody></table></div>`).join("")).join("")}</div>
   </div>`;
 }
