@@ -1,0 +1,40 @@
+name: Refresh board
+
+on:
+  schedule:
+    # Every morning: grade last night's games and pick up the week's lines and injuries.
+    - cron: "0 14 * * *"
+    # Closer to kickoff on game days, so recorded plays reflect late injury news.
+    - cron: "30 16 * * 0"  # Before the 1pm ET games.
+    - cron: "30 19 * * 0"  # Before the late afternoon games.
+    - cron: "0 22 * * 0,1,4,6"  # Before Sunday, Monday, Thursday and Saturday night games.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python build.py
+      - name: Publish if changed
+        run: |
+          git add index.html results
+          if git diff --cached --quiet; then
+            echo "Nothing changed."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Refresh data and results"
+            git push
+          fi

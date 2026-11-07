@@ -1,0 +1,361 @@
+<title>NFL Stat Board</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
+<style>
+/* A game-day call sheet: a band of tabs, then dense rows. Same look as the TD Board. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --sunken: #e1e6ec; --fg: #14202b; --muted: #566573; --line: #ccd5de;
+  --accent: #1d4f91; --accent-fg: #ffffff; --band: #13263d; --band-fg: #eaf0f7; --band-muted: #a7b9cc;
+  --rb: #b5461f; --wr: #1c62a8; --te: #7a3f9d; --qb: #8a6a00;
+  --good: #16764d; --bad: #b3362b; --warn: #a86a00;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Source Sans 3", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1620; --surface: #17212d; --sunken: #0b1118; --fg: #e6edf4; --muted: #9daebf; --line: #2b3a4a;
+  --accent: #7fb2f0; --accent-fg: #0a1420; --band: #0a1624; --band-fg: #e6edf4; --band-muted: #8ea4bb;
+  --rb: #f08a5d; --wr: #6db1f0; --te: #c592e6; --qb: #e0bd4f;
+  --good: #5fcb9b; --bad: #f0827a; --warn: #f0b84a; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0f1620; --surface: #17212d; --sunken: #0b1118; --fg: #e6edf4; --muted: #9daebf; --line: #2b3a4a;
+  --accent: #7fb2f0; --accent-fg: #0a1420; --band: #0a1624; --band-fg: #e6edf4; --band-muted: #8ea4bb;
+  --rb: #f08a5d; --wr: #6db1f0; --te: #c592e6; --qb: #e0bd4f;
+  --good: #5fcb9b; --bad: #f0827a; --warn: #f0b84a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.4 var(--body); margin: 0; font-variant-numeric: tabular-nums; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--band); }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1120px; margin: 0 auto; }
+header.top { background: var(--band); color: var(--band-fg); padding-block: calc(16px + env(safe-area-inset-top, 0px)) 0; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+h1 { font: 700 34px/1 var(--display); letter-spacing: .01em; margin: 0; text-transform: uppercase; }
+.brand small { color: var(--band-muted); font-size: 13px; }
+.updater { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 10px; }
+#update-status { color: var(--band-muted); font-size: 13px; }
+#update-btn { background: var(--band-fg); color: var(--band); border: 0; border-radius: 5px; cursor: pointer; font: 700 15px/1 var(--display); letter-spacing: .03em; padding: 8px 11px; text-transform: uppercase; white-space: nowrap; }
+#update-btn:disabled { cursor: wait; opacity: .6; }
+nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--band); }
+.tabrow { display: flex; gap: 2px; overflow-x: auto; padding-top: 8px; }
+.tabrow button { flex: none; background: none; border: 0; color: var(--band-muted); cursor: pointer; font: 600 18px/1 var(--display); letter-spacing: .03em; padding: 10px 14px 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; }
+.tabrow button:hover { color: var(--band-fg); }
+.tabrow button[aria-selected="true"] { background: var(--bg); color: var(--fg); }
+main { padding-block: 20px 48px; }
+h2 { font: 700 24px/1.1 var(--display); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
+h3 { font: 600 18px/1.1 var(--display); letter-spacing: .03em; margin: 0; text-transform: uppercase; }
+.stack { display: flex; flex-direction: column; gap: 18px; }
+.hint { color: var(--muted); font-size: 13.5px; max-width: 75ch; margin: 4px 0 0; }
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { background: none; border: 0; border-right: 1px solid var(--line); cursor: pointer; padding: 6px 11px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; max-width: 100%; }
+.count { color: var(--muted); font-size: 13.5px; }
+.chip { display: inline-block; font: 700 14px/1 var(--display); letter-spacing: .04em; color: var(--c); border: 1.5px solid var(--c); border-radius: 4px; padding: 3px 5px 2px; }
+.RB { --c: var(--rb); } .WR { --c: var(--wr); } .TE { --c: var(--te); } .QB { --c: var(--qb); }
+.flag { display: inline-block; font: 600 12px/1 var(--body); color: var(--warn); border: 1px solid currentColor; border-radius: 3px; padding: 2px 4px; margin-left: 4px; vertical-align: middle; }
+.flag.bad { color: var(--bad); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 5px; }
+.card .l1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; }
+.card .name { font: 600 21px/1.05 var(--display); }
+.card .mile { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card .mile span { font-weight: 600; }
+.card .rate { font: 700 28px/1 var(--display); color: var(--good); }
+.card .l3 { color: var(--muted); font-size: 13px; }
+.card .l3 b { color: var(--fg); font-weight: 600; }
+.meter { height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--good); }
+.day { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 -6px; }
+.day span { color: var(--muted); font-size: 13.5px; }
+
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+table.data { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.data th { background: var(--sunken); color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .03em; padding: 7px 9px; text-align: right; white-space: nowrap; }
+table.data td { padding: 6px 9px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+table.data .t { text-align: left; }
+table.data td.who { font-weight: 600; white-space: normal; min-width: 150px; }
+table.data td.who .count { font-weight: 400; font-size: 12.5px; }
+td.r { font-weight: 700; }
+td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 75%, var(--fg)); } td.r.h1 { color: var(--muted); font-weight: 400; }
+.hit { color: var(--good); font-weight: 700; } .miss { color: var(--bad); font-weight: 700; } .void { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel table.data th { background: none; padding: 3px 6px; } .panel table.data td { padding: 4px 6px; }
+.notes { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; }
+.notes li { margin: 8px 0; max-width: 80ch; }
+@media (max-width: 480px) { table.data th, table.data td { padding: 6px 5px; } table.data td.who { min-width: 118px; } table.data td.who .chip { display: none; } }
+.more { justify-self: start; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+</style>
+<header class="top gutter">
+  <div class="wrap">
+    <div class="brand">
+      <h1>NFL Stat Board</h1>
+      <small id="sub"></small>
+      <div class="updater"><span id="update-status" aria-live="polite"></span><button id="update-btn" type="button">Update injuries &amp; lines</button></div>
+    </div>
+  </div>
+</header>
+<nav class="tabs gutter"><div class="wrap tabrow" role="tablist" id="tabs"></div></nav>
+<main class="gutter"><div class="wrap" id="view"></div></main>
+<script>
+const DATA = /*__DATA__*/null;
+const MODEL = DATA.model, MARKETS = MODEL.markets;
+const UNAVAILABLE = new Set(["Out", "Doubtful", "Injured Reserve", "Suspension"]);
+const TEAMS = { // Keep in step with TEAMS in build.py.
+  Cardinals: "ARI", Falcons: "ATL", Ravens: "BAL", Bills: "BUF", Panthers: "CAR", Bears: "CHI", Bengals: "CIN", Browns: "CLE",
+  Cowboys: "DAL", Broncos: "DEN", Lions: "DET", Packers: "GB", Texans: "HOU", Colts: "IND", Jaguars: "JAX", Chiefs: "KC",
+  Rams: "LA", Chargers: "LAC", Raiders: "LV", Dolphins: "MIA", Vikings: "MIN", Patriots: "NE", Saints: "NO", Giants: "NYG",
+  Jets: "NYJ", Eagles: "PHI", Steelers: "PIT", Seahawks: "SEA", "49ers": "SF", Buccaneers: "TB", Titans: "TEN", Commanders: "WAS" };
+const STAT_SHORT = { rush_yds: "rush yds", carries: "carries", rec_yds: "rec yds", receptions: "rec", scrimmage: "rush+rec yds",
+  pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
+const state = { tab: "top", min: 0.7, market: "rush_yds", game: "", all: false };
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (v) => v == null ? "–" : Math.round(v * 100) + "%";
+const num = (v, d = 1) => v == null ? "–" : (+v).toFixed(d);
+
+function normName(name) { // Keep in step with norm_name in features.py.
+  return String(name).normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[.'’\-]/g, "").trim().replace(/\s+(jr|sr|ii|iii|iv|v)$/, "").replace(/\s+/g, " ");
+}
+const surname = (k) => k.split(" ").pop();
+function predict(coef, x) { // Keep in step with predict in build.py.
+  let z = coef.intercept;
+  for (const [k, c] of Object.entries(coef)) if (k !== "intercept") z += c * (x[k] || 0);
+  return 1 / (1 + Math.exp(-z));
+}
+const tierFor = (tiers, p) => tiers.filter((t) => p >= t.min).pop();
+
+function rescore() {
+  const games = Object.fromEntries(DATA.slate.map((g) => [g.team, g]));
+  for (const p of DATA.players) {
+    const g = games[p.team];
+    if (g.imp == null) continue;
+    p.x.imp = g.imp; p.x.margin = g.margin;
+    for (const k of Object.keys(p.plays)) {
+      const [mk, line] = k.split("|"), spec = MARKETS[mk].lines[line], prob = predict(spec.coef, p.x);
+      p.plays[k] = { p: prob, rate: tierFor(spec.tiers, prob).hit };
+    }
+  }
+}
+function parseInjuries(json) { // Keep in step with injuries in build.py.
+  const latest = {};
+  for (const team of json.injuries || []) {
+    const abbr = Object.entries(TEAMS).find(([n]) => (team.displayName || "").endsWith(n))?.[1];
+    for (const item of team.injuries || []) {
+      const key = `${abbr}|${normName(item.athlete.displayName)}`;
+      if (!latest[key] || (item.date || "") > latest[key][0]) latest[key] = [item.date || "", item.status || ""];
+    }
+  }
+  return Object.fromEntries(Object.entries(latest).map(([k, v]) => [k, v[1]]));
+}
+function statusFor(team, key, inj, teammates) { // Keep in step with status_for in build.py.
+  if (inj[`${team}|${key}`] !== undefined) return inj[`${team}|${key}`];
+  const listed = Object.keys(inj).filter((k) => k.startsWith(team + "|") && surname(k.split("|")[1]) === surname(key));
+  if (listed.length === 1 && teammates.filter((t) => surname(t) === surname(key)).length === 1) return inj[listed[0]];
+  return "";
+}
+function parseLines(text) { // Keep in step with slate in build.py.
+  const rows = text.trim().split("\n"), head = rows[0].split(","), out = {};
+  const col = (n) => head.indexOf(n);
+  for (const line of rows.slice(1)) {
+    const c = line.split(",");
+    if (c[col("season")] !== String(DATA.season) || c[col("week")] !== String(DATA.week)) continue;
+    const spread = parseFloat(c[col("spread_line")]), total = parseFloat(c[col("total_line")]);
+    if (isNaN(spread) || isNaN(total)) continue;
+    const final = c[col("result")] !== "";
+    out[c[col("home_team")]] = { total, margin: spread, imp: (total + spread) / 2, final };
+    out[c[col("away_team")]] = { total, margin: -spread, imp: (total - spread) / 2, final };
+  }
+  return out;
+}
+async function update() {
+  const btn = $("#update-btn"), status = $("#update-status");
+  btn.disabled = true; status.textContent = "Updating…";
+  const done = [];
+  try {
+    const inj = parseInjuries(await (await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries")).json());
+    const roster = {};
+    for (const p of DATA.players) (roster[p.team] ||= []).push(p.key);
+    let changed = 0;
+    for (const p of DATA.players) {
+      const s = statusFor(p.team, p.key, inj, roster[p.team]);
+      if (s !== p.status) changed++;
+      p.status = s;
+    }
+    done.push(`${changed} injury change${changed === 1 ? "" : "s"}`);
+  } catch (e) { done.push("injuries unavailable"); }
+  try {
+    const lines = parseLines(await (await fetch("https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv", { cache: "no-store" })).text());
+    let moved = 0;
+    for (const g of DATA.slate) {
+      const l = lines[g.team];
+      if (!l) continue;
+      if (l.imp !== g.imp) moved++;
+      Object.assign(g, l);
+    }
+    rescore();
+    done.push(`${moved / 2} line${moved === 2 ? "" : "s"} moved`);
+  } catch (e) { done.push("lines unavailable"); }
+  status.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: ${done.join(", ")}`;
+  btn.disabled = false;
+  render();
+}
+
+const kickTime = (iso) => new Date(iso);
+const dayLabel = (d) => d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+const timeLabel = (d) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const gameOf = (team) => DATA.slate.find((g) => g.team === team);
+const started = (team) => { const g = gameOf(team); return g.final || kickTime(g.kickoff) <= new Date(); };
+const mileLabel = (mk, line) => `${line}+ ${STAT_SHORT[mk]}`;
+const statusFlag = (s) => !s || s === "Active" ? "" : `<span class="flag${UNAVAILABLE.has(s) ? " bad" : ""}">${esc(s === "Injured Reserve" ? "IR" : s)}</span>`;
+const available = (p) => !UNAVAILABLE.has(p.status);
+
+function tierInfo(mk, line, prob) { return tierFor(MARKETS[mk].lines[line].tiers, prob); }
+function bestPlays(min) {
+  // One card per player and stat: the highest milestone whose tested rate clears `min`.
+  const out = [];
+  for (const p of DATA.players) {
+    if (!available(p) || started(p.team)) continue;
+    const best = {};
+    for (const [k, v] of Object.entries(p.plays)) {
+      const [mk, line] = k.split("|");
+      if (v.rate >= min && (!best[mk] || +line > best[mk].line)) best[mk] = { mk, line: +line, ...v };
+    }
+    for (const b of Object.values(best)) out.push({ pl: p, ...b });
+  }
+  return out.sort((a, b) => b.rate - a.rate || b.p - a.p);
+}
+
+const TABS = [["top", "Top plays"], ["stats", "By stat"], ["results", "Results"], ["backtest", "How tested"]];
+function renderTabs() {
+  $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${l}</button>`).join("");
+}
+function seg(name, opts, cur) {
+  return `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-set="${name}" data-val="${v}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join("")}</div>`;
+}
+
+function viewTop() {
+  const plays = bestPlays(state.min);
+  const byDay = {};
+  for (const x of plays) {
+    const g = gameOf(x.pl.team), d = dayLabel(kickTime(g.kickoff));
+    (byDay[d] ||= []).push(x);
+  }
+  const days = Object.keys(byDay).sort((a, b) => kickTime(gameOf(byDay[a][0].pl.team).kickoff) - kickTime(gameOf(byDay[b][0].pl.team).kickoff));
+  return `<div class="stack">
+    <div><h2>Week ${DATA.week} top plays</h2>
+    <p class="hint">Each card is the highest milestone for that player and stat that cleared the bar in testing. The big number is how often players in that model tier actually got there in seasons the model never trained on. It isn't the model's raw output. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
+    <div class="filters">${seg("min", [[0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
+    ${days.length ? days.map((d) => `<div class="day"><h3>${esc(d)}</h3></div><div class="cards">${byDay[d].map(card).join("")}</div>`).join("")
+      : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
+  </div>`;
+}
+function card(x) {
+  const p = x.pl, m = MARKETS[x.mk], g = gameOf(p.team), t = tierInfo(x.mk, x.line, x.p);
+  return `<div class="card">
+    <div class="l1"><span><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · ${timeLabel(kickTime(g.kickoff))}</span><span>${statusFlag(p.status)}</span></div>
+    <div class="name">${esc(p.player)}</div>
+    <div class="mile"><span>${esc(m.label)} ${x.line}+</span><span class="rate">${pct(x.rate)}</span></div>
+    <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
+    <div class="l3">Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ${p.x.gp} games · team proj <b>${num(g.imp)}</b> · tier tested on ${t.n} games</div>
+  </div>`;
+}
+
+function viewStats() {
+  const mk = state.market, m = MARKETS[mk], lines = Object.keys(m.lines).sort((a, b) => a - b);
+  const games = [...new Map(DATA.slate.filter((g) => g.home).map((g) => [g.team, g])).values()];
+  let rows = DATA.players.filter((p) => p.plays[`${mk}|${lines[0]}`] && (!state.game || [p.team, p.opp].includes(state.game)));
+  rows.sort((a, b) => b.plays[`${mk}|${lines[0]}`].p - a.plays[`${mk}|${lines[0]}`].p);
+  const shown = state.all ? rows : rows.slice(0, 40);
+  const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
+  return `<div class="stack">
+    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line.</p></div>
+    <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
+    <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>L3</th>${lines.map((l) => `<th>${l}+</th>`).join("")}</tr></thead><tbody>
+    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · proj ${num(g.imp)}</div></td>
+      <td>${num(p.x[m.stat + "_g"])}</td><td>${num(p.x[m.stat + "_l3"])}</td>
+      ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate; return `<td class="r ${cls(r)}">${pct(r)}</td>`; }).join("")}</tr>`; }).join("")}
+    </tbody></table></div>
+    ${rows.length > 40 ? `<button class="more" data-set="all" data-val="${!state.all}">${state.all ? "Show top 40" : `Show all ${rows.length}`}</button>` : ""}
+  </div>`;
+}
+
+const BUCKETS = [[0.8, 1.01, "80%+"], [0.7, 0.8, "70–79%"], [0.6, 0.7, "60–69%"], [0.5, 0.6, "50–59%"]];
+function summary(list) {
+  const g = list.filter((e) => e.hit != null);
+  const hits = g.filter((e) => e.hit).length;
+  return { n: g.length, hits, rate: g.length ? hits / g.length : null, exp: g.length ? g.reduce((s, e) => s + e.rate, 0) / g.length : null };
+}
+function viewResults() {
+  const all = DATA.results, graded = all.filter((e) => e.hit != null);
+  const pending = all.filter((e) => !("actual" in e)).length, voids = all.filter((e) => "actual" in e && e.hit == null).length;
+  const row = (label, list) => { const s = summary(list); return `<tr><td class="t">${label}</td><td>${s.n}</td><td>${s.hits}</td><td class="r">${pct(s.rate)}</td><td>${pct(s.exp)}</td></tr>`; };
+  const head = `<thead><tr><th class="t"></th><th>Graded</th><th>Hits</th><th>Hit rate</th><th>Tested</th></tr></thead>`;
+  const weeks = [...new Set(graded.map((e) => e.season * 100 + e.week))].sort((a, b) => b - a);
+  const top = graded.filter((e) => e.rate >= 0.7).sort((a, b) => b.week - a.week || b.rate - a.rate);
+  return `<div class="stack">
+    <div><h2>Results</h2><p class="hint">Every play at a tested rate of 50% or more is recorded before kickoff and graded once the box score posts. "Tested" is the rate those plays were expected to hit. Players who don't take an offensive snap are voided. Tracking started with Week ${Math.min(...all.map((e) => e.week)) || DATA.week} of ${DATA.season}, so early weeks are a small sample.</p></div>
+    <p class="count">${graded.length} graded · ${pending} waiting on games or box scores · ${voids} void</p>
+    <div class="grid2">
+      <div class="panel"><h3>By tested rate</h3><table class="data">${head}<tbody>${BUCKETS.map(([lo, hi, l]) => row(l, graded.filter((e) => e.rate >= lo && e.rate < hi))).join("")}${row("All", graded)}</tbody></table></div>
+      <div class="panel"><h3>By stat</h3><table class="data">${head}<tbody>${Object.entries(MARKETS).map(([k, m]) => row(m.label, graded.filter((e) => e.market === k))).join("")}</tbody></table></div>
+      <div class="panel"><h3>By week</h3><table class="data">${head}<tbody>${weeks.map((w) => row(`Week ${w % 100}`, graded.filter((e) => e.season * 100 + e.week === w))).join("") || '<tr><td class="t" colspan="5">No graded games yet.</td></tr>'}</tbody></table></div>
+    </div>
+    <h3>Graded 70%+ plays</h3>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Player</th><th class="t">Milestone</th><th>Tested</th><th>Actual</th><th class="t">Result</th></tr></thead><tbody>
+    ${top.map((e) => `<tr><td class="t">${e.week}</td><td class="t who">${esc(e.player)} <span class="count">${esc(e.team)}</span></td><td class="t">${mileLabel(e.market, e.line)}</td><td>${pct(e.rate)}</td><td>${num(e.actual, 0)}</td><td class="t ${e.hit ? "hit" : "miss"}">${e.hit ? "Hit" : "Miss"}</td></tr>`).join("") || '<tr><td class="t" colspan="6">None graded yet.</td></tr>'}
+    </tbody></table></div>
+  </div>`;
+}
+
+function viewBacktest() {
+  return `<div class="stack">
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
+    <ul class="notes">
+      <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
+      <li><b>Sample size.</b> Each held-out tier rests on 40 to a few hundred games. QB stats rest on 658 QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
+      <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at these same seasons. That will flatter the results a little. The forward Results page is the honest check.</li>
+      <li><b>Closing lines vs. earlier lines.</b> Training used the final spread and total in nflverse's games.csv. The board uses whatever line is posted when it refreshes, which can be days before kickoff and less accurate.</li>
+      <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season and a snap in one of the team's last two games. Weeks 1–2 and newly promoted starters (a backup QB stepping in, say) are thin or missing. A traded player is skipped until they have played for the new team.</li>
+      <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
+    </ul>
+    <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
+      <div class="panel"><h3>${esc(m.label)} ${line}+</h3>
+      <span class="count">${s.heldOut.n} held-out games · ${pct(s.heldOut.base)} cleared it overall</span>
+      <table class="data"><thead><tr><th class="t">Model says</th><th>Games</th><th>Hit</th><th>2025</th><th>2026</th></tr></thead><tbody>
+      ${[...s.tiers].reverse().map((t) => { const yr = (y) => t.bySeason[y] ? `${pct(t.bySeason[y][0] / t.bySeason[y][1])} <span class="count">(${t.bySeason[y][1]})</span>` : "–";
+        return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n}</td><td class="r">${pct(t.hit)}</td><td>${yr("2025")}</td><td>${yr("2026")}</td></tr>`; }).join("")}
+      </tbody></table></div>`).join("")).join("")}</div>
+  </div>`;
+}
+
+function render() {
+  renderTabs();
+  const built = new Date(DATA.builtAt);
+  $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No games scheduled";
+  $("#view").innerHTML = { top: viewTop, stats: viewStats, results: viewResults, backtest: viewBacktest }[state.tab]();
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-tab]");
+  if (t) { state.tab = t.dataset.tab; render(); window.scrollTo(0, 0); return; }
+  const s = e.target.closest("button[data-set]");
+  if (s) {
+    const v = s.dataset.val;
+    state[s.dataset.set] = s.dataset.set === "min" ? +v : s.dataset.set === "all" ? v === "true" : v;
+    if (s.dataset.set === "market") state.all = false;
+    render();
+  }
+});
+document.addEventListener("change", (e) => { if (e.target.matches("select[data-set]")) { state[e.target.dataset.set] = e.target.value; render(); } });
+$("#update-btn").addEventListener("click", update);
+render();
+</script>
