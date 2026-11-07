@@ -135,6 +135,18 @@ def score(rows, model, slate_by_team):
     return players
 
 
+def defenses(pg, week):
+    """Allowed per game to each position before this week, with league average and rank (1 = allows most)."""
+    t = F.defense_table(pg, SEASON, week)
+    out = []
+    for r in t.to_dict("records"):
+        row = {"team": r["defense"], "pos": r["pos"], "games": int(r["games"])}
+        for c in F.ALLOWED:
+            row[c] = [round(r[c], 1), round(r[c + "_lg"], 1), int(r[c + "_rank"])]
+        out.append(row)
+    return out
+
+
 def load_history():
     if os.path.exists(HISTORY_PATH):
         with open(HISTORY_PATH, encoding="utf-8") as f:
@@ -206,6 +218,7 @@ def main(src):
         if len(players) < 50:
             sys.exit(f"Only {len(players)} players scored for week {week}; leaving the last page live.")
         data["slate"], data["players"] = games_week, players
+        data["defenses"] = defenses(pg, week)
         if data["injuriesAt"]:
             snapshot(history, players, slate_by_team, week, now)
     try:

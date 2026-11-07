@@ -91,6 +91,12 @@ td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 
 .notes { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; }
 .notes li { margin: 8px 0; max-width: 80ch; }
 @media (max-width: 480px) { table.data th, table.data td { padding: 6px 5px; } table.data td.who { min-width: 118px; } table.data td.who .chip { display: none; } }
+.tablebox table.data th:first-child, .tablebox table.data td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
+.tablebox table.data th:first-child { background: var(--sunken); }
+.soft { color: var(--good); font-weight: 700; } .tough { color: var(--bad); font-weight: 700; }
+.card .mu { font-size: 13px; color: var(--muted); }
+table.data th button { all: unset; cursor: pointer; } table.data th[aria-sort] { color: var(--fg); }
+tr.mine td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .more { justify-self: start; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 </style>
 <header class="top gutter">
@@ -115,7 +121,16 @@ const TEAMS = { // Keep in step with TEAMS in build.py.
   Jets: "NYJ", Eagles: "PHI", Steelers: "PIT", Seahawks: "SEA", "49ers": "SF", Buccaneers: "TB", Titans: "TEN", Commanders: "WAS" };
 const STAT_SHORT = { rush_yds: "rush yds", carries: "carries", rec_yds: "rec yds", receptions: "rec", scrimmage: "rush+rec yds",
   pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
-const state = { tab: "top", min: 0.7, market: "rush_yds", game: "", all: false };
+const state = { tab: "top", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
+const DEF = Object.fromEntries((DATA.defenses || []).map((d) => [`${d.team}|${d.pos}`, d]));
+const DEF_COLS = { QB: ["passing_yards", "passing_tds", "completions", "attempts", "rushing_yards"],
+  RB: ["rushing_yards", "carries", "scrimmage_yards", "receptions", "receiving_yards"],
+  WR: ["targets", "receptions", "receiving_yards"], TE: ["targets", "receptions", "receiving_yards"] };
+const COL_LABEL = { passing_yards: "Pass yds", passing_tds: "Pass TD", completions: "Comp", attempts: "Att", rushing_yards: "Rush yds",
+  carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets" };
+const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+const rankClass = (r) => r <= 8 ? "soft" : r >= 25 ? "tough" : "";
+function matchup(p, stat) { const d = DEF[`${p.opp}|${p.pos}`]; return d && d[stat] ? { v: d[stat][0], lg: d[stat][1], rank: d[stat][2], games: d.games } : null; }
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (v) => v == null ? "–" : Math.round(v * 100) + "%";
@@ -234,7 +249,7 @@ function bestPlays(min) {
   return out.sort((a, b) => b.rate - a.rate || b.p - a.p);
 }
 
-const TABS = [["top", "Top plays"], ["stats", "By stat"], ["results", "Results"], ["backtest", "How tested"]];
+const TABS = [["top", "Top plays"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How tested"]];
 function renderTabs() {
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${l}</button>`).join("");
 }
@@ -265,9 +280,18 @@ function card(x) {
     <div class="name">${esc(p.player)}</div>
     <div class="mile"><span>${esc(m.label)} ${x.line}+</span><span class="rate">${pct(x.rate)}</span></div>
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
+    ${muLine(p, m)}
     <div class="l3">Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ${p.x.gp} games · team proj <b>${num(g.imp)}</b> · tier tested on ${t.n} games</div>
   </div>`;
 }
+
+function muLine(p, m) {
+  const u = matchup(p, m.stat);
+  if (!u) return "";
+  return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span></div>`;
+}
+const STAT_SHORT_COL = { rushing_yards: "rush yds", carries: "carries", receiving_yards: "rec yds", receptions: "rec", scrimmage_yards: "rush+rec yds",
+  passing_yards: "pass yds", passing_tds: "pass TD", completions: "comp" };
 
 function viewStats() {
   const mk = state.market, m = MARKETS[mk], lines = Object.keys(m.lines).sort((a, b) => a - b);
@@ -277,11 +301,11 @@ function viewStats() {
   const shown = state.all ? rows : rows.slice(0, 40);
   const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line.</p></div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Tested hit rate for each milestone, highest first. Avg and L3 (last 3) are this season's per-game numbers in games played. Proj is the team's implied points from the betting line. Opp is where this week's opponent ranks in that stat allowed to the player's position (1st = allows the most).</p></div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>L3</th>${lines.map((l) => `<th>${l}+</th>`).join("")}</tr></thead><tbody>
-    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · proj ${num(g.imp)}</div></td>
+    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · proj ${num(g.imp)}${(() => { const u = matchup(p, m.stat); return u ? ` · opp <span class="${rankClass(u.rank)}">${ord(u.rank)}</span>` : ""; })()}</div></td>
       <td>${num(p.x[m.stat + "_g"])}</td><td>${num(p.x[m.stat + "_l3"])}</td>
       ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate; return `<td class="r ${cls(r)}">${pct(r)}</td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
@@ -317,15 +341,30 @@ function viewResults() {
   </div>`;
 }
 
+function viewDefense() {
+  const pos = state.dpos, cols = DEF_COLS[pos], sort = cols.includes(state.dsort) ? state.dsort : cols[0];
+  const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => a[sort][2] - b[sort][2]);
+  const opp = Object.fromEntries(DATA.slate.map((g) => [g.opp, g.team]));
+  return `<div class="stack">
+    <div><h2>Defense vs. position</h2><p class="hint">Per game allowed to each position this season, through Week ${DATA.week - 1}. Ranks run from 1st (allows the most, the softest matchup) to 32nd. Green is a top-8 soft matchup and red is a bottom-8 tough one. Tap a column to sort. Rows for defenses facing a team this week show the opponent.</p></div>
+    <div class="filters">${seg("dpos", ["QB", "RB", "WR", "TE"].map((p) => [p, p + "s"]), pos)}</div>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Defense</th><th class="t">Faces</th>${cols.map((c) => `<th${c === sort ? ' aria-sort="descending"' : ""}><button data-set="dsort" data-val="${c}">${COL_LABEL[c]}</button></th>`).join("")}</tr></thead><tbody>
+    ${rows.map((d) => `<tr><td class="t who">${esc(d.team)} <span class="count">${d.games}g</span></td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${cols.map((c) => `<td>${num(d[c][0])} <span class="${rankClass(d[c][2]) || "count"}">${ord(d[c][2])}</span></td>`).join("")}</tr>`).join("")}
+    </tbody></table></div>
+    <p class="hint">League average per game: ${cols.map((c) => `${COL_LABEL[c]} ${num(rows[0]?.[c][1])}`).join(" · ")}.</p>
+  </div>`;
+}
+
 function viewBacktest() {
   return `<div class="stack">
-    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
+    <div><h2>How it was tested</h2><p class="hint">One logistic model per milestone. Inputs are the player's per-game average and last-3 average for the stat, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, and the team's implied points and spread. Rushing yards, rush attempts, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average. Only games before the one being predicted count. The 2025 rates come from a model trained on 2024 only. The 2026 rates (Weeks 1–${DATA.week - 1}) come from a model trained on 2024–25. Tiers with fewer than ${40} games are merged with the tier below.</p></div>
     <ul class="notes">
       <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So the board shows tested tier rates, not raw output.</li>
       <li><b>Sample size.</b> Each held-out tier rests on 40 to a few hundred games. QB stats rest on 658 QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
       <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at these same seasons. That will flatter the results a little. The forward Results page is the honest check.</li>
       <li><b>Closing lines vs. earlier lines.</b> Training used the final spread and total in nflverse's games.csv. The board uses whatever line is posted when it refreshes, which can be days before kickoff and less accurate.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season and a snap in one of the team's last two games. Weeks 1–2 and newly promoted starters (a backup QB stepping in, say) are thin or missing. A traded player is skipped until they have played for the new team.</li>
+      <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
@@ -342,7 +381,7 @@ function render() {
   renderTabs();
   const built = new Date(DATA.builtAt);
   $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No games scheduled";
-  $("#view").innerHTML = { top: viewTop, stats: viewStats, results: viewResults, backtest: viewBacktest }[state.tab]();
+  $("#view").innerHTML = { top: viewTop, stats: viewStats, defense: viewDefense, results: viewResults, backtest: viewBacktest }[state.tab]();
 }
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-tab]");

@@ -141,7 +141,56 @@ def add_features(pg, upcoming=None):
     rows["recent"] = recent
     for p in POSITIONS:
         rows["is" + p] = (rows.pos == p).astype(int)
-    return rows
+    return add_matchup(rows, pg)
+
+
+# What each defense has allowed per game to each position.
+ALLOWED = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards",
+           "receptions", "targets", "receiving_yards", "scrimmage_yards"]
+
+
+def allowed_by_game(pg):
+    """One row per defense, game and position: totals that position put up against it."""
+    games = pg[["season", "week", "opp"]].drop_duplicates()
+    out = pg.groupby(["season", "week", "opp", "pos"])[ALLOWED].sum()
+    # A position with no snaps against a defense in a game it played allowed zero, not missing.
+    full = pd.MultiIndex.from_tuples([(s, w, d, p) for s, w, d in games.itertuples(index=False) for p in POSITIONS],
+                                     names=["season", "week", "opp", "pos"])
+    return out.reindex(full, fill_value=0).reset_index().rename(columns={"opp": "defense"})
+
+
+def defense_table(pg, season, week):
+    """Per-game allowed by each defense to each position in games before `week`, with league average and rank.
+
+    Rank 1 allows the most, so 1 is the best matchup for the offense.
+    """
+    a = allowed_by_game(pg)
+    a = a[(a.season == season) & (a.week < week)]
+    per = a.groupby(["defense", "pos"])[ALLOWED].mean()
+    per["games"] = a.groupby(["defense", "pos"]).size()
+    per = per.reset_index()
+    for c in ALLOWED:
+        per[c + "_lg"] = per.groupby("pos")[c].transform("mean")
+        per[c + "_rank"] = per.groupby("pos")[c].rank(ascending=False, method="min")
+    return per
+
+
+def add_matchup(rows, pg):
+    """dvp_<stat>: the opponent's allowed per game to the player's position, minus league average, before this week."""
+    a = allowed_by_game(pg)
+    keys = rows[["season", "week"]].drop_duplicates()
+    parts = []
+    for s, w in keys.itertuples(index=False):
+        prior = a[(a.season == s) & (a.week < w)]
+        if not len(prior):
+            continue
+        per = prior.groupby(["defense", "pos"])[ALLOWED].mean()
+        lg = prior.groupby("pos")[ALLOWED].mean()
+        diff = (per - lg.reindex(per.index.get_level_values("pos")).values).add_prefix("dvp_")
+        diff["dgp"] = prior.groupby(["defense", "pos"]).size()
+        parts.append(diff.reset_index().assign(season=s, week=w))
+    dvp = pd.concat(parts, ignore_index=True).rename(columns={"defense": "opp"})
+    return rows.merge(dvp, how="left", on=["season", "week", "opp", "pos"])
 
 
 def load_season(season, games, src=None):
@@ -155,12 +204,16 @@ def load_season(season, games, src=None):
 
 
 # Milestones the board shows. "feats" are the model inputs for that stat; position flags are added
-# for stats that cover more than one position.
+# for stats that cover more than one position. "matchup" adds the opponent's allowed-vs-position,
+# kept only where it improved held-out accuracy at every milestone (receiving, receptions,
+# rush + rec and passing TDs saw no gain or a loss).
 MARKETS = {
     "rush_yds": {"label": "Rushing yards", "stat": "rushing_yards", "pos": ["RB", "QB"], "lines": [40, 60, 80],
+                 "matchup": True,
                  "feats": ["rushing_yards_g", "rushing_yards_l3", "carries_g", "carries_sh"]},
     "carries": {"label": "Rush attempts", "stat": "carries", "pos": ["RB", "QB"], "lines": [12, 15, 18],
-                "feats": ["carries_g", "carries_l3", "carries_sh"]},
+                "matchup": True,
+                 "feats": ["carries_g", "carries_l3", "carries_sh"]},
     "rec_yds": {"label": "Receiving yards", "stat": "receiving_yards", "pos": ["WR", "TE", "RB"], "lines": [40, 60, 80],
                 "feats": ["receiving_yards_g", "receiving_yards_l3", "targets_g", "targets_sh"]},
     "receptions": {"label": "Receptions", "stat": "receptions", "pos": ["WR", "TE", "RB"], "lines": [4, 5, 6],
@@ -168,11 +221,13 @@ MARKETS = {
     "scrimmage": {"label": "Rush + rec yards", "stat": "scrimmage_yards", "pos": ["RB", "WR", "TE"], "lines": [60, 80, 100],
                   "feats": ["scrimmage_yards_g", "scrimmage_yards_l3", "carries_g", "targets_g"]},
     "pass_yds": {"label": "Passing yards", "stat": "passing_yards", "pos": ["QB"], "lines": [225, 250],
+                 "matchup": True,
                  "feats": ["passing_yards_g", "passing_yards_l3", "attempts_g"]},
     "pass_tds": {"label": "Passing TDs", "stat": "passing_tds", "pos": ["QB"], "lines": [2],
                  "feats": ["passing_tds_g", "passing_yards_g", "attempts_g"]},
     "completions": {"label": "Completions", "stat": "completions", "pos": ["QB"], "lines": [20, 22],
-                    "feats": ["completions_g", "completions_l3", "attempts_g"]},
+                    "matchup": True,
+                 "feats": ["completions_g", "completions_l3", "attempts_g"]},
 }
 GAME = ["imp", "margin"]
 MIN_GAMES = 2
@@ -181,7 +236,7 @@ MIN_GAMES = 2
 def model_inputs(market):
     m = MARKETS[market]
     flags = ["is" + p for p in m["pos"][1:]]
-    return m["feats"] + ["snap_last"] + GAME + flags
+    return m["feats"] + ["snap_last"] + GAME + flags + (["dvp_" + m["stat"]] if m.get("matchup") else [])
 
 
 def eligible(rows, market):
