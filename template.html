@@ -274,8 +274,8 @@ function viewTop() {
   return `<div class="stack">
     <div><h2>Week ${DATA.week} top plays</h2>
     <p class="hint">Each card is the highest milestone for that player and stat that cleared the bar in testing. The big number is how often players in that model tier actually got there in seasons the model never trained on. It isn't the model's raw output. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
-    <div class="filters">${seg("min", [[PERFECT, "100%"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
-    ${state.min === PERFECT ? `<p class="hint">100%: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) that also tested at ${pct(PERFECT_MIN_RATE)} or better. A perfect record so far doesn't make it a sure thing; the big number is still the tested rate.</p>` : ""}
+    <div class="filters">${seg("min", [[PERFECT, "100% so far"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
+    ${state.min === PERFECT ? `<p class="hint">100% so far: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) that also tested at ${pct(PERFECT_MIN_RATE)} or better. The big number is the player's record, like 7/7. Under it is the tested rate: how often players in that model tier actually got there, which is the better guide to the real chance. No milestone tests at 100%.</p>` : ""}
     ${days.length ? days.map((d) => `<div class="day"><h3>${esc(d)}</h3></div><div class="cards">${byDay[d].map(card).join("")}</div>`).join("")
       : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
   </div>`;
@@ -285,9 +285,12 @@ function card(x) {
   return `<div class="card">
     <div class="l1"><span><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · ${timeLabel(kickTime(g.kickoff))}</span><span>${statusFlag(p.status)}</span></div>
     <div class="name">${esc(p.player)}</div>
-    <div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${pct(x.rate)}</span></div>
+    ${state.min === PERFECT ? (() => { const h = history(p, m.stat, x.line);
+      return `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${h.hits}/${h.games}</span></div>
+    <div class="mu">Cleared every game so far · tested rate <b>${pct(x.rate)}</b></div>`; })()
+      : `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${pct(x.rate)}</span></div>`}
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
-    ${histLine(p, m, x.line)}
+    ${state.min === PERFECT ? "" : histLine(p, m, x.line)}
     ${muLine(p, m)}
     ${scheduleLine(p, m)}
     ${roleLine(p, x.mk)}
