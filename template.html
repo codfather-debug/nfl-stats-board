@@ -295,9 +295,9 @@ function splitAvg(p, stat, col, val) {
 function splitLine(p, m, g) {
   const parts = SPLIT_DEFS.map(([col, yes, no]) => {
     const here = g[col] ? 1 : 0, a = splitAvg(p, m.stat, col, here), b = splitAvg(p, m.stat, col, 1 - here);
-    return `${here ? yes : no} <b>${num(a.avg)}</b> <span class="count">(${a.n}g)</span> vs ${num(b.avg)}`;
+    return `${here ? yes : no} <b>${num(a.avg)}</b> <span class="count">(${a.n}g)</span> vs ${(here ? no : yes).toLowerCase()} ${num(b.avg)} <span class="count">(${b.n}g)</span>`;
   });
-  return `<div class="mu">This game: ${parts.join(" · ")}</div>`;
+  return `<div class="mu">Splits for this game: ${parts.join(" · ")}</div>`;
 }
 function histLine(p, m, line) {
   const h = history(p, m.stat, line);
