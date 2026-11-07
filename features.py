@@ -427,6 +427,8 @@ def load_season(season, games, src=None):
 # "schedule" adds the schedule-adjusted average (adj_), which helped carries and the receiving
 # stats on 2022-24; it did nothing for rushing yards and hurt QB stats. Averages against
 # similar-rank defenses (sim_) and plain strength of schedule (sos_) didn't help any stat.
+# Nor did the share of a defense's targets that go to the position (tested for receiving yards,
+# receptions, rush + rec, longest catch and anytime TD), so it's shown on the page only.
 MARKETS = {
     "rush_yds": {"label": "Rushing yards", "stat": "rushing_yards", "pos": ["RB", "QB"], "lines": [40, 60, 80],
                  "matchup": True,
