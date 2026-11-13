@@ -22,6 +22,8 @@ SSL_CERT_FILE=/etc/ssl/cert.pem .venv/bin/python build.py
 
 `requirements.txt` is what the daily build needs; `requirements-train.txt` adds scikit-learn for training and the tests. Both scripts take an optional folder of downloaded files (`train.py data`), which saves re-downloading seven seasons while experimenting; `data/` is git-ignored.
 
+Anytime TD is the exception: its chance comes from the NFL TD Board (`chances.json` on that site), so both sites show one number. `build.py` falls back to this board's own TD model for a player the TD Board doesn't list, or when its file is missing or for another week.
+
 The chance shown for a play is not the model's raw score. Held-out games are sorted into 5-point bands by score, and the chance is read off the line through the bands' real hit rates.
 
 Changing `SEASON` in `build.py` and `SEASONS`/`FOLDS` in `train.py` rolls it to a new season.

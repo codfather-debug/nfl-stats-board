@@ -19,6 +19,7 @@ import features as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEASON = 2026
 INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries"
+TD_BOARD_URL = "https://codfather-debug.github.io/nfl-td-board/chances.json"  # The NFL TD Board's any-TD chances.
 HISTORY_PATH = os.path.join(HERE, "results", "history.json")
 UNAVAILABLE = {"Out", "Doubtful", "Injured Reserve", "Suspension"}
 RECORD_MIN = 0.5  # Plays at or above this tested hit rate are recorded and graded.
@@ -120,6 +121,33 @@ def rate_for(tiers, p):
         if p <= b["avgP"]:
             return a["hit"] + (b["hit"] - a["hit"]) * (p - a["avgP"]) / (b["avgP"] - a["avgP"])
     return tiers[-1]["hit"]
+
+
+def td_board(week, text=None):
+    """Any-TD chances from the NFL TD Board, by (team, name), so both sites show one number.
+
+    Empty if its file can't be read or is for another week; the board's own TD model is used then.
+    """
+    try:
+        shared = json.loads(text if text is not None else F.fetch(TD_BOARD_URL, timeout=30))
+        if (shared["season"], shared["week"]) != (SEASON, week):
+            print(f"TD Board is on week {shared['week']}, not {week}; using this board's own TD chances")
+            return {}
+        return {(p["team"], p["key"]): float(p["anyRate"]) for p in shared["players"] if 0 < p["anyRate"] < 1}
+    except Exception as e:
+        print(f"TD Board chances unavailable ({e}); using this board's own TD chances")
+        return {}
+
+
+def use_td_board(players, shared):
+    """Show the TD Board's chance on Anytime TD wherever it has the player. Returns how many it covered."""
+    covered = 0
+    for p in players:
+        rate = shared.get((p["team"], p["key"]))
+        if rate is not None and "td|1" in p["plays"]:
+            p["plays"]["td|1"]["rate"] = p["tdBoard"] = round(rate, 4)
+            covered += 1
+    return covered
 
 
 def stale_inputs(model):
@@ -335,6 +363,8 @@ def main(src):
         players = score(rows, model, slate_by_team, game_logs(pg[pg.season == SEASON]), tiers)
         if len(players) < 50:
             sys.exit(f"Only {len(players)} players scored for week {week}; leaving the last page live.")
+        covered = use_td_board(players, td_board(week))
+        print(f"Anytime TD: {covered} of {sum('td|1' in p['plays'] for p in players)} players use the TD Board's chance")
         data["slate"], data["players"] = games_week, players
         data["defenses"] = defenses(pg[pg.season == SEASON], week)
         data["logCols"] = LOG

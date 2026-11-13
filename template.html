@@ -96,6 +96,7 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 .day span { color: var(--muted); font-size: 13.5px; }
 
 .tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.l3 a, .notes a { color: var(--accent); }
 table.data { border-collapse: collapse; width: 100%; font-size: 14px; }
 table.data th { background: var(--sunken); color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .03em; padding: 7px 9px; text-align: right; white-space: nowrap; }
 table.data td { padding: 6px 9px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
@@ -189,6 +190,7 @@ function predict(coef, x) { // Keep in step with predict in build.py.
   return 1 / (1 + Math.exp(-z));
 }
 const rateClass = (r) => r >= 0.8 ? "h4" : r >= 0.7 ? "h3" : "";
+const TD_BOARD = "https://codfather-debug.github.io/nfl-td-board/";
 const how = (text) => `<details class="how"><summary>How to read this</summary><p>${text}</p></details>`;
 const tierFor = (tiers, p) => tiers.filter((t) => p >= t.min).pop() || tiers[0];
 function rateFor(tiers, p) { // Keep in step with rate_for in build.py.
@@ -212,6 +214,7 @@ function rescore() {
       p.plays[k] = { p: prob, rate: rateFor(spec.tiers, prob) };
     }
     for (const mk of Object.keys(p.proj)) p.proj[mk] = project(MARKETS[mk].proj.coef, p.x);
+    if (p.tdBoard != null && p.plays["td|1"]) p.plays["td|1"].rate = p.tdBoard; // Anytime TD shows the TD Board's chance. Keep in step with use_td_board in build.py.
   }
 }
 function parseInjuries(json) { // Keep in step with injuries in build.py.
@@ -338,7 +341,7 @@ function card(x) {
     ${muLine(p, m, full)}
     ${full ? scheduleLine(p, m) : ""}
     ${roleLine(p, x.mk)}
-    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}chance based on ${t.n.toLocaleString()} past games like this${margin}</div>
+    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}${x.mk === "td" && p.tdBoard != null ? `chance from the <a href="${TD_BOARD}">NFL TD Board</a>, which also uses the betting line` : `chance based on ${t.n.toLocaleString()} past games like this${margin}`}</div>
     ${full ? splitLine(p, m, g) : ""}
     ${gameLog(p, x.mk)}
   </div>`;
@@ -596,6 +599,7 @@ function viewBacktest() {
       <li><b>Raw model output runs high.</b> In the top band of each milestone the model's own score ran ${gap} point${gap === 1 ? "" : "s"} above what actually happened, on average. So each chance on the board is the real hit rate of past players the model scored the same way, not the model's raw number.</li>
       <li><b>Give or take.</b> Each band rests on 40 to several thousand games, so its hit rate has a margin: the "Range" columns below, and "give or take" on each card, cover where the true rate sits 19 times out of 20. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their margins are the widest.</li>
       <li><b>Chosen after seeing data.</b> The milestones, bands and inputs were picked while looking at past seasons. New inputs were chosen on 2022–24 only, so the 2025–26 column is the fairest check; the forward Results page is the honest one.</li>
+      <li><b>Anytime TD comes from the NFL TD Board.</b> So both sites show the same number, a player's Anytime TD chance is the <a href="${TD_BOARD}">TD Board's</a>, which also uses the betting line and teammates who are out. The Anytime TD table below is this board's own TD model, used only for a player the TD Board doesn't list or when its numbers are for another week.</li>
       <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
       <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card in Full detail. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season or ${MODEL.minPrevGames}+ last season, and must be on nflverse's active roster (IR and practice squad are left off). A traded player shows with the new team using numbers from the old one. A backup QB stepping in has little to go on, and receivers aren't adjusted when their starting QB is out.</li>
