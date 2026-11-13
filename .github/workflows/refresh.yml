@@ -3,7 +3,8 @@ name: Refresh board
 on:
   schedule:
     # Every morning: grade last night's games and pick up the week's lines and injuries.
-    - cron: "0 14 * * *"
+    # Half an hour after the NFL TD Board's 15:00 refresh, so the Anytime TD chances copied from it are that morning's.
+    - cron: "30 15 * * *"
     # Closer to kickoff on game days, so recorded plays reflect late injury news.
     - cron: "30 16 * * 0"  # Before the 1pm ET games.
     - cron: "30 19 * * 0"  # Before the late afternoon games.

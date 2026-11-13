@@ -67,14 +67,14 @@ class TdBoard(unittest.TestCase):
     def test_td_chance_comes_from_the_td_board_when_it_has_the_player(self):
         players = [{"team": "DET", "key": "jahmyr gibbs", "plays": {"td|1": {"p": 0.7, "rate": 0.6}, "rush_yds|50": {"p": 0.8, "rate": 0.75}}},
                    {"team": "DET", "key": "someone else", "plays": {"td|1": {"p": 0.2, "rate": 0.2}}}]
-        self.assertEqual(build.use_td_board(players, build.td_board(10, self.SHARED)), 1)
+        self.assertEqual(build.use_td_board(players, build.td_board(10, self.SHARED)[0]), 1)
         self.assertEqual(players[0]["plays"]["td|1"], {"p": 0.7, "rate": 0.613})
         self.assertEqual(players[0]["plays"]["rush_yds|50"]["rate"], 0.75)
         self.assertEqual(players[1]["plays"]["td|1"]["rate"], 0.2)
 
     def test_another_weeks_numbers_or_a_broken_file_are_ignored(self):
-        self.assertEqual(build.td_board(11, self.SHARED), {})
-        self.assertEqual(build.td_board(10, "not json"), {})
+        self.assertEqual(build.td_board(11, self.SHARED), ({}, ""))
+        self.assertEqual(build.td_board(10, "not json"), ({}, ""))
 
 
 class Tiers(unittest.TestCase):

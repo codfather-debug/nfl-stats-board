@@ -234,7 +234,25 @@ function statusFor(team, key, inj, teammates) { // Keep in step with status_for 
   if (listed.length === 1 && teammates.filter((t) => surname(t) === surname(key)).length === 1) return inj[listed[0]];
   return "";
 }
+function useTdBoard(shared) { // Keep in step with td_board and use_td_board in build.py.
+  if (!shared || shared.season !== DATA.season || shared.week !== DATA.week) return false;
+  const rates = {};
+  for (const s of shared.players || []) if (s.anyRate > 0 && s.anyRate < 1) rates[`${s.team}|${s.key}`] = s.anyRate;
+  for (const p of DATA.players) {
+    const rate = rates[`${p.team}|${p.key}`];
+    if (rate != null && p.plays["td|1"]) { p.tdBoard = rate; p.plays["td|1"].rate = rate; }
+  }
+  DATA.tdBoardAt = shared.builtAt || "";
+  return true;
+}
+async function syncTdBoard() { // The TD Board's latest chances, read each time the page opens so the two sites can't drift apart between builds.
+  try {
+    const resp = await fetch(TD_BOARD + "chances.json", { cache: "no-cache" });
+    if (resp.ok && useTdBoard(await resp.json())) render();
+  } catch (e) { /* Keep the chances from the last build. */ }
+}
 async function update() {
+  syncTdBoard();
   const btn = $("#update-btn"), status = $("#update-status");
   btn.disabled = true; status.textContent = "Updating…";
   const done = [];
@@ -633,7 +651,7 @@ const NEEDS_SLATE = new Set(["top", "matchup", "stats", "defense"]);
 function render() {
   renderTabs();
   const built = new Date(DATA.builtAt);
-  $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No games scheduled";
+  $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}${DATA.tdBoardAt ? ` · TD chances from the TD Board, ${new Date(DATA.tdBoardAt).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}` : "No games scheduled";
   $("#view").innerHTML = !DATA.week && NEEDS_SLATE.has(state.tab)
     ? `<div class="stack"><h2>No games scheduled</h2><p class="hint">There's no regular-season week on the schedule right now. Results and How it works are still here.</p></div>`
     : VIEWS[state.tab]();
@@ -674,4 +692,5 @@ document.addEventListener("change", (e) => {
 $("#update-btn").addEventListener("click", update);
 state.tab = tabFromAddress();
 render();
+if (DATA.week) syncTdBoard();
 </script>
