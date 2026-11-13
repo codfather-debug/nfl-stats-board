@@ -1,5 +1,9 @@
 <title>NFL Stat Board</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="NFL players most likely to clear a stat milestone this week, with hit rates tested on seasons the model never saw.">
+<meta name="theme-color" content="#13263d" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a1624" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2313263d'/%3E%3Cpath d='M7 23V9h3.2l6.6 9V9H20v14h-3.2l-6.6-9v9z' fill='%23eaf0f7'/%3E%3Crect x='22.5' y='9' width='3' height='14' fill='%235fcb9b'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
 <style>
@@ -42,11 +46,20 @@ nav.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; bac
 .tabrow button { flex: none; background: none; border: 0; color: var(--band-muted); cursor: pointer; font: 600 18px/1 var(--display); letter-spacing: .03em; padding: 10px 14px 11px; text-transform: uppercase; border-radius: 4px 4px 0 0; }
 .tabrow button:hover { color: var(--band-fg); }
 .tabrow button[aria-selected="true"] { background: var(--bg); color: var(--fg); }
+.tabrow { scrollbar-width: none; } .tabrow::-webkit-scrollbar { display: none; }
+/* On a phone the last tabs sit off-screen: fade the edge so it's clear the row scrolls. */
+@media (max-width: 700px) { .tabrow { padding-right: 36px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); } }
 main { padding-block: 20px 48px; }
 h2 { font: 700 24px/1.1 var(--display); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
 h3 { font: 600 18px/1.1 var(--display); letter-spacing: .03em; margin: 0; text-transform: uppercase; }
 .stack { display: flex; flex-direction: column; gap: 18px; }
 .hint { color: var(--muted); font-size: 13.5px; max-width: 75ch; margin: 4px 0 0; }
+details.how { color: var(--muted); font-size: 13.5px; max-width: 75ch; margin-top: 4px; }
+details.how summary { cursor: pointer; color: var(--accent); font-weight: 600; width: fit-content; }
+details.how p { margin: 4px 0 0; }
+.prose { max-width: 75ch; display: grid; gap: 10px; } .prose p { margin: 0; }
+.prose h3 { margin-top: 8px; }
+footer.foot { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); margin-top: 32px; padding-top: 12px; }
 button, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
@@ -54,6 +67,11 @@ button, select { font: inherit; color: inherit; }
 .seg button { background: none; border: 0; border-right: 1px solid var(--line); cursor: pointer; padding: 6px 11px; font-size: 14px; font-weight: 600; color: var(--muted); }
 .seg button:last-child { border-right: 0; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+/* A long list of choices wraps as separate pills instead of a broken-up bar. */
+.seg.pills { border: 0; border-radius: 0; background: none; overflow: visible; gap: 6px; }
+.seg.pills button { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.seg.pills button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+@media (pointer: coarse) { .seg button, select { min-height: 40px; } details.log summary, details.how summary, .more { padding-block: 6px; } }
 select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; max-width: 100%; }
 .count { color: var(--muted); font-size: 13.5px; }
 .chip { display: inline-block; font: 700 14px/1 var(--display); letter-spacing: .04em; color: var(--c); border: 1.5px solid var(--c); border-radius: 4px; padding: 3px 5px 2px; }
@@ -61,17 +79,19 @@ select { background: var(--surface); border: 1px solid var(--line); border-radiu
 .flag { display: inline-block; font: 600 12px/1 var(--body); color: var(--warn); border: 1px solid currentColor; border-radius: 3px; padding: 2px 4px; margin-left: 4px; vertical-align: middle; }
 .flag.bad { color: var(--bad); }
 
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 5px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 265px), 1fr)); gap: 10px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 5px; align-content: start; --rc: var(--fg); }
+/* One colour scale for a chance everywhere: strong green at 80%+, softer at 70%+, plain below. */
+.card.h4 { --rc: var(--good); } .card.h3 { --rc: color-mix(in srgb, var(--good) 70%, var(--fg)); }
 .card .l1 { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 13.5px; }
 .card .name { font: 600 21px/1.05 var(--display); }
 .card .mile { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .card .mile span { font-weight: 600; }
-.card .rate { font: 700 28px/1 var(--display); color: var(--good); }
+.card .rate { font: 700 28px/1 var(--display); color: var(--rc); }
 .card .l3 { color: var(--muted); font-size: 13px; }
 .card .l3 b { color: var(--fg); font-weight: 600; }
 .meter { height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; }
-.meter i { display: block; height: 100%; background: var(--good); }
+.meter i { display: block; height: 100%; background: var(--rc); }
 .day { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 -6px; }
 .day span { color: var(--muted); font-size: 13.5px; }
 
@@ -83,7 +103,9 @@ table.data .t { text-align: left; }
 table.data td.who { font-weight: 600; white-space: normal; min-width: 150px; }
 table.data td.who .count { font-weight: 400; font-size: 12.5px; }
 td.r { font-weight: 700; }
-td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 75%, var(--fg)); } td.r.h1 { color: var(--muted); font-weight: 400; }
+td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 70%, var(--fg)); } td.r.h1 { color: var(--muted); font-weight: 400; }
+tr.dim { opacity: .5; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
 .hit { color: var(--good); font-weight: 700; } .miss { color: var(--bad); font-weight: 700; } .void { color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
@@ -91,8 +113,9 @@ td.r.h4 { color: var(--good); } td.r.h3 { color: color-mix(in srgb, var(--good) 
 table.mt td.who { min-width: 104px; } table.mt td, table.mt th { padding: 5px 4px; } table.mt td.who .count { font-size: 12px; }
 @media (max-width: 480px) { .panel { padding: 10px; } }
 .panel table.data th { background: none; padding: 3px 6px; } .panel table.data td { padding: 4px 6px; }
-.notes { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 16px; }
-.notes li { margin: 8px 0; max-width: 80ch; }
+.panel > table.data td.t:first-child { white-space: normal; }
+.notes { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 16px 8px 32px; margin: 0; column-width: 420px; column-gap: 40px; }
+.notes li { margin: 0 0 10px; max-width: 80ch; break-inside: avoid; }
 @media (max-width: 480px) { table.data th, table.data td { padding: 6px 5px; } table.data td.who { min-width: 118px; } table.data td.who .chip { display: none; } }
 .tablebox table.data th:first-child, .tablebox table.data td:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
 .tablebox table.data th:first-child { background: var(--sunken); }
@@ -114,8 +137,9 @@ details.log table.data { margin-top: 6px; font-size: 13px; } details.log table.d
     </div>
   </div>
 </header>
-<nav class="tabs gutter"><div class="wrap tabrow" role="tablist" id="tabs"></div></nav>
-<main class="gutter"><div class="wrap" id="view"></div></main>
+<nav class="tabs gutter"><div class="wrap tabrow" role="tablist" aria-label="Sections" id="tabs"></div></nav>
+<main class="gutter"><div class="wrap"><div id="view" role="tabpanel"></div>
+  <footer class="foot">Data from nflverse (box scores, snaps, play-by-play, rosters) and ESPN (injuries). Player stats only: these are likely outcomes, not betting advice.</footer></div></main>
 <script>
 const DATA = /*__DATA__*/null;
 const MODEL = DATA.model, MARKETS = MODEL.markets;
@@ -130,12 +154,16 @@ const STAT_SHORT = { rush_yds: "rush yds", carries: "carries", rec_yds: "rec yds
   td: "TD", long_rush: "yd long rush", long_rec: "yd long catch", pass_yds: "pass yds", pass_tds: "pass TD", completions: "comp" };
 const LOG = Object.fromEntries((DATA.logCols || []).map((c, i) => [c, i])); // Keep in step with LOG in build.py.
 function logStat(row, stat) { return stat === "scrimmage_yards" ? row[LOG.rushing_yards] + row[LOG.receiving_yards] : row[LOG[stat]]; }
-function history(p, stat, line) {
+function hitHistory(p, stat, line) {
   const vals = p.log.map((r) => logStat(r, stat)), l5 = vals.slice(-5);
   return { hits: vals.filter((v) => v >= line).length, games: vals.length, hits5: l5.filter((v) => v >= line).length, games5: l5.length };
 }
 const mileText = (mk, line) => mk === "td" ? "Anytime TD" : `${MARKETS[mk].label} ${line}+`;
-const state = { tab: "top", mgame: "", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "" };
+const state = { tab: "top", mgame: "", min: 0.7, market: "rush_yds", game: "", all: false, dpos: "RB", dsort: "", detail: "0" };
+// The level filter and card detail are remembered on this device; storage can be blocked, so it's optional.
+const SAVED = ["min", "detail"];
+try { const saved = JSON.parse(localStorage.getItem("statboard") || "{}"); for (const k of SAVED) if (saved[k] != null) state[k] = saved[k]; } catch (e) {}
+function save() { try { localStorage.setItem("statboard", JSON.stringify(Object.fromEntries(SAVED.map((k) => [k, state[k]])))); } catch (e) {} }
 const DEF = Object.fromEntries((DATA.defenses || []).map((d) => [`${d.team}|${d.pos}`, d]));
 const DEF_COLS = { QB: ["passing_yards", "passing_tds", "completions", "attempts", "rushing_yards"],
   RB: ["rushing_yards", "carries", "scrimmage_yards", "tshare", "receptions", "receiving_yards", "rr_tds"],
@@ -160,7 +188,17 @@ function predict(coef, x) { // Keep in step with predict in build.py.
   for (const [k, c] of Object.entries(coef)) if (k !== "intercept") z += c * (x[k] || 0);
   return 1 / (1 + Math.exp(-z));
 }
-const tierFor = (tiers, p) => tiers.filter((t) => p >= t.min).pop();
+const rateClass = (r) => r >= 0.8 ? "h4" : r >= 0.7 ? "h3" : "";
+const how = (text) => `<details class="how"><summary>How to read this</summary><p>${text}</p></details>`;
+const tierFor = (tiers, p) => tiers.filter((t) => p >= t.min).pop() || tiers[0];
+function rateFor(tiers, p) { // Keep in step with rate_for in build.py.
+  if (p <= tiers[0].avgP) return tiers[0].hit;
+  for (let i = 1; i < tiers.length; i++) {
+    const a = tiers[i - 1], b = tiers[i];
+    if (p <= b.avgP) return a.hit + (b.hit - a.hit) * (p - a.avgP) / (b.avgP - a.avgP);
+  }
+  return tiers[tiers.length - 1].hit;
+}
 
 function project(coef, x) { // Keep in step with project in build.py.
   let z = coef.intercept;
@@ -171,7 +209,7 @@ function rescore() {
   for (const p of DATA.players) {
     for (const k of Object.keys(p.plays)) {
       const [mk, line] = k.split("|"), spec = MARKETS[mk].lines[line], prob = predict(spec.coef, p.x);
-      p.plays[k] = { p: prob, rate: tierFor(spec.tiers, prob).hit };
+      p.plays[k] = { p: prob, rate: rateFor(spec.tiers, prob) };
     }
     for (const mk of Object.keys(p.proj)) p.proj[mk] = project(MARKETS[mk].proj.coef, p.x);
   }
@@ -245,7 +283,7 @@ function bestPlays(min) {
       const [mk, line] = k.split("|");
       let ok = v.rate >= min;
       if (min === PERFECT) {
-        const h = history(p, MARKETS[mk].stat, +line);
+        const h = hitHistory(p, MARKETS[mk].stat, +line);
         ok = v.rate >= PERFECT_MIN_RATE && h.games >= PERFECT_MIN_GAMES && h.hits === h.games;
       }
       if (ok && (!best[mk] || +line > best[mk].line)) best[mk] = { mk, line: +line, ...v };
@@ -257,10 +295,14 @@ function bestPlays(min) {
 
 const TABS = [["top", "Top plays"], ["matchup", "Matchups"], ["stats", "By stat"], ["defense", "Defenses"], ["results", "Results"], ["backtest", "How it works"]];
 function renderTabs() {
-  $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${l}</button>`).join("");
+  // Built once and then updated, so a tab keeps keyboard focus when it's chosen.
+  const el = $("#tabs");
+  if (!el.children.length) el.innerHTML = TABS.map(([k, l]) => `<button role="tab" id="tab-${k}" aria-controls="view" data-tab="${k}">${l}</button>`).join("");
+  for (const b of el.children) { const on = b.dataset.tab === state.tab; b.setAttribute("aria-selected", on); b.tabIndex = on ? 0 : -1; }
+  $("#view").setAttribute("aria-labelledby", "tab-" + state.tab);
 }
-function seg(name, opts, cur) {
-  return `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-set="${name}" data-val="${v}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join("")}</div>`;
+function seg(name, opts, cur, label, cls = "") {
+  return `<div class="seg ${cls}" role="group" aria-label="${label}">${opts.map(([v, l]) => `<button type="button" data-set="${name}" data-val="${v}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join("")}</div>`;
 }
 
 function viewTop() {
@@ -273,29 +315,31 @@ function viewTop() {
   const days = Object.keys(byDay).sort((a, b) => kickTime(gameOf(byDay[a][0].pl.team).kickoff) - kickTime(gameOf(byDay[b][0].pl.team).kickoff));
   return `<div class="stack">
     <div><h2>Week ${DATA.week} top plays</h2>
-    <p class="hint">Each card is the highest milestone for that player and stat at this level. The big number is the player's chance this week: across past seasons, that's how often players in the same spot (same role, volume and matchup strength) actually hit it. Out, Doubtful and IR players are removed, and games that have kicked off drop off.</p></div>
-    <div class="filters">${seg("min", [[PERFECT, "100% so far"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min)}<span class="count">${plays.length} plays</span></div>
+    <p class="hint">The big number is the player's chance of clearing that milestone this week.</p>
+    ${how(`Each card is the highest milestone for that player and stat at this level. The chance is how often, across past seasons, players in the same spot (same role, volume and matchup strength) actually hit it. Out, Doubtful and IR players are removed, and games that have kicked off drop off. Compact cards show the lines that feed the chance; Full detail adds schedule strength, splits and the defense's target share, which are context only.`)}</div>
+    <div class="filters">${seg("min", [[PERFECT, "100% so far"], [0.8, "80%+"], [0.7, "70%+"], [0.6, "60%+"]], state.min, "Chance level")}${seg("detail", [["0", "Compact"], ["1", "Full detail"]], state.detail, "Card detail")}<span class="count">${plays.length} plays</span></div>
     ${state.min === PERFECT ? `<p class="hint">100% so far: milestones the player has cleared in every game this season (${PERFECT_MIN_GAMES}+ games) with a chance this week of ${pct(PERFECT_MIN_RATE)} or better. The big number is the player's record, like 7/7. Under it is the player's chance this week, which is the better guide: even a perfect start misses sometimes, and no play is ever a sure thing.</p>` : ""}
     ${days.length ? days.map((d) => `<div class="day"><h3>${esc(d)}</h3></div><div class="cards">${byDay[d].map(card).join("")}</div>`).join("")
       : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
   </div>`;
 }
 function card(x) {
-  const p = x.pl, m = MARKETS[x.mk], g = gameOf(p.team), t = tierInfo(x.mk, x.line, x.p);
-  return `<div class="card">
+  const p = x.pl, m = MARKETS[x.mk], g = gameOf(p.team), t = tierInfo(x.mk, x.line, x.p), full = state.detail === "1";
+  const margin = t.lo == null ? "" : `, give or take ${Math.max(1, Math.round((t.hi - t.lo) * 50))} points`;
+  return `<div class="card ${rateClass(x.rate)}">
     <div class="l1"><span><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)} · ${timeLabel(kickTime(g.kickoff))}</span><span>${statusFlag(p.status)}</span></div>
     <div class="name">${esc(p.player)}</div>
-    ${state.min === PERFECT ? (() => { const h = history(p, m.stat, x.line);
+    ${state.min === PERFECT ? (() => { const h = hitHistory(p, m.stat, x.line);
       return `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${h.hits}/${h.games}</span></div>
     <div class="mu">Hit in all ${h.games} games this season · chance this week <b>${pct(x.rate)}</b></div>`; })()
       : `<div class="mile"><span>${esc(mileText(x.mk, x.line))}</span><span class="rate">${pct(x.rate)}</span></div>`}
     <div class="meter"><i style="width:${Math.round(x.rate * 100)}%"></i></div>
     ${state.min === PERFECT ? "" : histLine(p, m, x.line)}
-    ${muLine(p, m)}
-    ${scheduleLine(p, m)}
+    ${muLine(p, m, full)}
+    ${full ? scheduleLine(p, m) : ""}
     ${roleLine(p, x.mk)}
-    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}chance based on ${t.n.toLocaleString()} past games like this</div>
-    ${splitLine(p, m, g)}
+    <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}chance based on ${t.n.toLocaleString()} past games like this${margin}</div>
+    ${full ? splitLine(p, m, g) : ""}
     ${gameLog(p, x.mk)}
   </div>`;
 }
@@ -317,7 +361,7 @@ function splitLine(p, m, g) {
   return `<div class="mu">Splits for this game: ${parts.join(" · ")}</div>`;
 }
 function histLine(p, m, line) {
-  const h = history(p, m.stat, line);
+  const h = hitHistory(p, m.stat, line);
   return `<div class="mu">Cleared in <b>${h.hits} of ${h.games}</b> games this season · last ${h.games5}: <b>${h.hits5}</b></div>`;
 }
 const RECEIVING = new Set(["rec_yds", "receptions", "long_rec"]), PASSING = new Set(["pass_yds", "pass_tds", "completions"]);
@@ -365,13 +409,13 @@ function scheduleLine(p, m) {
   return lines.map((l) => `<div class="mu">${l}</div>`).join("");
 }
 const TARGET_STATS = new Set(["receptions", "receiving_yards", "scrimmage_yards", "rr_tds", "long_rec"]);
-function muLine(p, m) {
+function muLine(p, m, full) {
   const u = matchup(p, m.stat);
   if (!u) return "";
   const g = gameOf(p.team), d = DEF[`${p.opp}|${p.pos}`], atHome = !g.home;
   const v = d[m.stat][atHome ? 3 : 4], n = atHome ? d.gamesHome : d.gamesRoad;
   const venue = v == null ? "" : ` · <b>${num(v)}</b> ${atHome ? "at home" : "on the road"} <span class="count">(${n}g)</span>`;
-  const ts = d.tshare && p.pos !== "QB" && TARGET_STATS.has(m.stat) ? `<div class="mu">${esc(p.opp)} sends <b>${pct(d.tshare[0])}</b> of targets to ${p.pos}s (avg ${pct(d.tshare[1])}) · <span class="${rankClass(d.tshare[2])}">${ord(d.tshare[2])} most</span></div>` : "";
+  const ts = full && d.tshare && p.pos !== "QB" && TARGET_STATS.has(m.stat) ? `<div class="mu">${esc(p.opp)} sends <b>${pct(d.tshare[0])}</b> of targets to ${p.pos}s (avg ${pct(d.tshare[1])}) · <span class="${rankClass(d.tshare[2])}">${ord(d.tshare[2])} most</span></div>` : "";
   return `<div class="mu">${esc(p.opp)} allows <b>${num(u.v)}</b> ${STAT_SHORT_COL[m.stat]}/g to ${p.pos}s (avg ${num(u.lg)}) · <span class="${rankClass(u.rank)}">${ord(u.rank)} most</span>${venue}</div>${ts}`;
 }
 const STAT_SHORT_COL = { rushing_yards: "rush yds", carries: "carries", receiving_yards: "rec yds", receptions: "rec", scrimmage_yards: "rush+rec yds",
@@ -383,44 +427,57 @@ function viewStats() {
   let rows = DATA.players.filter((p) => p.plays[`${mk}|${lines[0]}`] && (!state.game || [p.team, p.opp].includes(state.game)));
   rows.sort((a, b) => b.plays[`${mk}|${lines[0]}`].p - a.plays[`${mk}|${lines[0]}`].p);
   const shown = state.all ? rows : rows.slice(0, 40);
-  const cls = (r) => r >= 0.8 ? "h4" : r >= 0.6 ? "h3" : r < 0.3 ? "h1" : "";
+  const cls = (r) => rateClass(r) || (r < 0.3 ? "h1" : "");
   return `<div class="stack">
-    <div><h2>${esc(m.label)}</h2><p class="hint">Chance this week for each milestone, highest first. Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).</p></div>
-    <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk)}</div>
+    <div><h2>${esc(m.label)}</h2><p class="hint">Chance this week for each milestone, highest first.</p>
+    ${how(`Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).`)}</div>
+    <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk, "Stat", "pills")}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
-    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' style="opacity:.5"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${PASSING.has(mk) ? "" : ` · ${RECEIVING.has(mk) || p.pos !== "RB" ? `${pct(p.x.targets_sh)} tgt${trend(p.x.targets_sh3, p.x.targets_sh)}` : `${pct(p.x.carries_sh)} car${trend(p.x.carries_sh3, p.x.carries_sh)}`}`}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
+    ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' class="dim"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${PASSING.has(mk) ? "" : ` · ${RECEIVING.has(mk) || p.pos !== "RB" ? `${pct(p.x.targets_sh)} tgt${trend(p.x.targets_sh3, p.x.targets_sh)}` : `${pct(p.x.carries_sh)} car${trend(p.x.carries_sh3, p.x.carries_sh)}`}`}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
       <td>${num(p.x[m.stat + "_g"])}</td><td>${m.proj ? `<b>${num(p.proj[mk])}</b>` : num(p.x[m.stat + "_l3"])}</td>
-      ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = history(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
+      ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = hitHistory(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
     ${rows.length > 40 ? `<button class="more" data-set="all" data-val="${!state.all}">${state.all ? "Show top 40" : `Show all ${rows.length}`}</button>` : ""}
   </div>`;
 }
 
 const BUCKETS = [[0.8, 1.01, "80%+"], [0.7, 0.8, "70–79%"], [0.6, 0.7, "60–69%"], [0.5, 0.6, "50–59%"]];
+function wilson(hits, n) { // 95% range for a hit rate. Keep in step with wilson in train.py.
+  if (!n) return null;
+  const z = 1.96, p = hits / n, d = 1 + z * z / n, mid = (p + z * z / (2 * n)) / d;
+  const half = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+  return [Math.max(0, mid - half), Math.min(1, mid + half)];
+}
+const rangeText = (r) => r ? `${Math.round(r[0] * 100)}–${pct(r[1])}` : "–";
 function summary(list) {
   const g = list.filter((e) => e.hit != null);
   const hits = g.filter((e) => e.hit).length;
-  return { n: g.length, hits, rate: g.length ? hits / g.length : null, exp: g.length ? g.reduce((s, e) => s + e.rate, 0) / g.length : null };
+  return { n: g.length, hits, rate: g.length ? hits / g.length : null, range: wilson(hits, g.length), exp: g.length ? g.reduce((s, e) => s + e.rate, 0) / g.length : null };
 }
+const weekKey = (e) => e.season * 100 + e.week;
 function viewResults() {
   const all = DATA.results, graded = all.filter((e) => e.hit != null);
   const pending = all.filter((e) => !("actual" in e)).length, voids = all.filter((e) => "actual" in e && e.hit == null).length;
-  const row = (label, list) => { const s = summary(list); return `<tr><td class="t">${label}</td><td>${s.n}</td><td>${s.hits}</td><td class="r">${pct(s.rate)}</td><td>${pct(s.exp)}</td></tr>`; };
-  const head = `<thead><tr><th class="t"></th><th>Graded</th><th>Hits</th><th>Hit rate</th><th>Expected</th></tr></thead>`;
-  const weeks = [...new Set(graded.map((e) => e.season * 100 + e.week))].sort((a, b) => b - a);
-  const top = graded.filter((e) => e.rate >= 0.7).sort((a, b) => b.week - a.week || b.rate - a.rate);
+  // A player's 40+, 60+ and 80+ rise and fall together, so also count just the highest milestone per player and stat.
+  const tops = Object.values(graded.reduce((m, e) => { const k = [weekKey(e), e.team, e.player, e.market].join("|"); if (!m[k] || e.line > m[k].line) m[k] = e; return m; }, {}));
+  const row = (label, list) => { const s = summary(list); return `<tr><td class="t">${label}</td><td>${s.n}</td><td class="r">${pct(s.rate)}</td><td class="count">${rangeText(s.range)}</td><td>${pct(s.exp)}</td></tr>`; };
+  const head = `<thead><tr><th class="t"></th><th>Graded</th><th>Hit rate</th><th>Range</th><th>Expected</th></tr></thead>`;
+  const weeks = [...new Set(graded.map(weekKey))].sort((a, b) => b - a), seasons = new Set(graded.map((e) => e.season));
+  const top = graded.filter((e) => e.rate >= 0.7).sort((a, b) => weekKey(b) - weekKey(a) || b.rate - a.rate);
+  const first = all.length ? Math.min(...all.map(weekKey)) : null;
   return `<div class="stack">
-    <div><h2>Results</h2><p class="hint">Every play with a chance of 50% or more is recorded before kickoff and graded once the box score posts. "Expected" is the average chance those plays were given, so you can see if they hit as often as promised. Players who don't take an offensive snap are voided. Tracking started with Week ${Math.min(...all.map((e) => e.week)) || DATA.week} of ${DATA.season}, so early weeks are a small sample.</p></div>
+    <div><h2>Results</h2><p class="hint">Every play with a chance of 50% or more is recorded before kickoff and graded once the box score posts.</p>
+    ${how(`"Expected" is the average chance those plays were given. "Range" is where the true hit rate most likely sits given how few plays have been graded: if Expected falls inside it, the plays are hitting about as often as promised, and a gap inside the range is just luck so far. One player's milestones in the same stat rise and fall together, so "Highest milestone only" counts each player and stat once. Players who don't take an offensive snap are voided.${first ? ` Tracking started with Week ${first % 100} of ${Math.floor(first / 100)}, so early weeks are a small sample.` : ""}`)}</div>
     <p class="count">${graded.length} graded · ${pending} waiting on games or box scores · ${voids} void</p>
     <div class="grid2">
-      <div class="panel"><h3>By chance given</h3><table class="data">${head}<tbody>${BUCKETS.map(([lo, hi, l]) => row(l, graded.filter((e) => e.rate >= lo && e.rate < hi))).join("")}${row("All", graded)}</tbody></table></div>
+      <div class="panel"><h3>By chance given</h3><table class="data">${head}<tbody>${BUCKETS.map(([lo, hi, l]) => row(l, graded.filter((e) => e.rate >= lo && e.rate < hi))).join("")}${row("All", graded)}${row("Highest milestone only", tops)}</tbody></table></div>
       <div class="panel"><h3>By stat</h3><table class="data">${head}<tbody>${Object.entries(MARKETS).map(([k, m]) => row(m.label, graded.filter((e) => e.market === k))).join("")}</tbody></table></div>
-      <div class="panel"><h3>By week</h3><table class="data">${head}<tbody>${weeks.map((w) => row(`Week ${w % 100}`, graded.filter((e) => e.season * 100 + e.week === w))).join("") || '<tr><td class="t" colspan="5">No graded games yet.</td></tr>'}</tbody></table></div>
+      <div class="panel"><h3>By week</h3><table class="data">${head}<tbody>${weeks.map((w) => row(`Week ${w % 100}${seasons.size > 1 ? `, ${Math.floor(w / 100)}` : ""}`, graded.filter((e) => weekKey(e) === w))).join("") || '<tr><td class="t" colspan="5">No graded games yet.</td></tr>'}</tbody></table></div>
     </div>
     <h3>Graded plays with a 70%+ chance</h3>
-    <div class="tablebox"><table class="data"><thead><tr><th class="t">Wk</th><th class="t">Player</th><th class="t">Milestone</th><th>Chance</th><th>Actual</th><th class="t">Result</th></tr></thead><tbody>
-    ${top.map((e) => `<tr><td class="t">${e.week}</td><td class="t who">${esc(e.player)} <span class="count">${esc(e.team)}</span></td><td class="t">${mileLabel(e.market, e.line)}</td><td>${pct(e.rate)}</td><td>${num(e.actual, 0)}</td><td class="t ${e.hit ? "hit" : "miss"}">${e.hit ? "Hit" : "Miss"}</td></tr>`).join("") || '<tr><td class="t" colspan="6">None graded yet.</td></tr>'}
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th class="t">Milestone</th><th>Chance</th><th>Result</th></tr></thead><tbody>
+    ${top.map((e) => `<tr><td class="t who">${esc(e.player)} <span class="count">${esc(e.team)} · Wk ${e.week}</span></td><td class="t">${mileLabel(e.market, e.line)}</td><td>${pct(e.rate)}</td><td class="${e.hit ? "hit" : "miss"}">${num(e.actual, 0)} · ${e.hit ? "Hit" : "Miss"}</td></tr>`).join("") || '<tr><td class="t" colspan="4">None graded yet.</td></tr>'}
     </tbody></table></div>
   </div>`;
 }
@@ -496,7 +553,8 @@ function viewMatchup() {
   const g = games.find((x) => x.team === state.mgame) || games.find((x) => !started(x.team)) || games[0];
   const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
   return `<div class="stack">
-    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game: the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. Defense ranks run 1st (allows the most) to 32nd.</p></div>
+    <div><h2>Matchups</h2><p class="hint">Each team's starters for the game, with projected lines and what the other defense allows.</p>
+    ${how(`Starters are the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. Defense ranks run 1st (allows the most) to 32nd.`)}</div>
     <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
     <span class="count">${where}</span></div>
     <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
@@ -508,8 +566,9 @@ function viewDefense() {
   const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => (a[sort]?.[2] ?? 99) - (b[sort]?.[2] ?? 99));
   const opp = Object.fromEntries(DATA.slate.map((g) => [g.opp, g.team]));
   return `<div class="stack">
-    <div><h2>Defense vs. position</h2><p class="hint">Per game allowed to each position this season, through Week ${DATA.week - 1}. Ranks run from 1st (allows the most, the softest matchup) to 32nd. Green is a top-8 soft matchup and red is a bottom-8 tough one. Tap a column to sort. Rows for defenses facing a team this week show the opponent.</p></div>
-    <div class="filters">${seg("dpos", ["QB", "RB", "WR", "TE"].map((p) => [p, p + "s"]), pos)}</div>
+    <div><h2>Defense vs. position</h2><p class="hint">Per game allowed to each position this season, through Week ${DATA.week - 1}. Tap a column to sort.</p>
+    ${how(`Ranks run from 1st (allows the most, the softest matchup) to 32nd. Green is a top-8 soft matchup and red is a bottom-8 tough one. Rows for defenses facing a team this week show the opponent.`)}</div>
+    <div class="filters">${seg("dpos", ["QB", "RB", "WR", "TE"].map((p) => [p, p + "s"]), pos, "Position")}</div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Defense</th><th class="t">Faces</th>${cols.map((c) => `<th${c === sort ? ' aria-sort="descending"' : ""}><button data-set="dsort" data-val="${c}">${COL_LABEL[c]}</button></th>`).join("")}</tr></thead><tbody>
     ${rows.map((d) => `<tr><td class="t who">${esc(d.team)} <span class="count">${d.games}g</span></td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${cols.map((c) => d[c] ? `<td>${c === "tshare" ? pct(d[c][0]) : num(d[c][0])} <span class="${rankClass(d[c][2]) || "count"}">${ord(d[c][2])}</span></td>` : "<td>–</td>").join("")}</tr>`).join("")}
     </tbody></table></div>
@@ -518,56 +577,97 @@ function viewDefense() {
 }
 
 function viewBacktest() {
+  const first = MODEL.seasons[0], last = MODEL.seasons[MODEL.seasons.length - 1];
+  // How far the model's own score ran above the real hit rate in the top band of each milestone.
+  const tops = Object.values(MARKETS).flatMap((m) => Object.values(m.lines).map((s) => s.tiers[s.tiers.length - 1]));
+  const gap = Math.round(tops.reduce((a, t) => a + (t.avgP - t.hit), 0) / tops.length * 100);
   return `<div class="stack">
-    <div><h2>How it works</h2><p class="hint">Every percentage on the board is a player's chance this week. Here's how it's worked out and checked. One logistic model per milestone, trained on ${MODEL.seasons[0]}–${MODEL.seasons[MODEL.seasons.length - 1]}. Inputs are the player's per-game average for the stat (blended with last season's, which counts like 3 games, so early weeks and players back from injury still have a baseline), last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Rushing yards, rush attempts, receptions, rush + rec, passing yards and completions also use the opponent's allowed-per-game to the player's position, compared with the league average; passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count. Each season from 2022 on is graded by a model trained only on the seasons before it, starting from 2020, so every rate comes from games the model never saw. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check. Tiers with fewer than ${40} games are merged with the tier below. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p></div>
+    <div class="prose"><h2>How it works</h2>
+      <p>Every percentage on the board is a player's chance this week. Here's how it's worked out and checked.</p>
+      <h3>The models</h3>
+      <p>One logistic model per milestone, trained on ${first}–${last}. Each stat also has a projected line: a median model on the same inputs, so the player should finish above it about half the time.</p>
+      <h3>What goes in</h3>
+      <p>The player's per-game average for the stat, blended with last season's (which counts like 3 games, so early weeks and players back from injury still have a baseline), and its square root, which lets the chance level off for the biggest producers instead of climbing forever. Then the last-3 average, volume (carries, targets or pass attempts) and share of team volume, snap share in the player's last game, games played this season and games missed since last playing. Before a player's first game of the season, the last-3 average and snap share fall back to the blended average and last season's snap share.</p>
+      <p>Rushing yards, rush attempts, receptions, rush + rec, passing yards and completions also use what the opponent allows per game to the player's position, compared with the league average and counted for less early on, when it rests on a few games. Passing yards and completions also use what the opponent allows at home or on the road, matching this game. Rushing, receiving, receptions, rush + rec and longest catch also use the share of team carries or targets held by teammates who are out. Anytime TD uses red zone and inside-10 touches and shares. Longest rush and longest catch come from play-by-play. Only games before the one being predicted count.</p>
+      <h3>How it's checked</h3>
+      <p>Each season from 2022 on is graded by a model trained only on the seasons before it, starting from ${first}, so every rate comes from games the model never saw. Those games are sorted into 5-point bands by model score and each band's real hit rate is worked out. A player's chance is read off the line between the two nearest bands, so a tiny change in score can't jump the chance by ten points. Bands with fewer than ${40} games are merged with the band below, and neighbors are pooled wherever a higher score didn't hit more often. Inputs were chosen on 2022–24, so the 2025–26 column is the cleanest check.</p>
+    </div>
     <ul class="notes">
-      <li><b>Raw model output runs high.</b> In the top tier the model's own probability ran several points above what actually happened, mostly for receiving stats. So each chance on the board is the real hit rate of past players the model scored the same way, not the model's raw number.</li>
-      <li><b>Sample size.</b> Each held-out tier rests on 40 to over a thousand games. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their tiers carry more noise (roughly ±7 points at 150 games).</li>
-      <li><b>Chosen after seeing data.</b> The milestones, tier edges and inputs were picked while looking at past seasons. New inputs were chosen on 2022–24 only, so the 2025–26 column is the fairest check; the forward Results page is the honest one.</li>
+      <li><b>Raw model output runs high.</b> In the top band of each milestone the model's own score ran ${gap} point${gap === 1 ? "" : "s"} above what actually happened, on average. So each chance on the board is the real hit rate of past players the model scored the same way, not the model's raw number.</li>
+      <li><b>Give or take.</b> Each band rests on 40 to several thousand games, so its hit rate has a margin: the "Range" columns below, and "give or take" on each card, cover where the true rate sits 19 times out of 20. QB stats rest on ${MARKETS.pass_yds.lines["225"].heldOut.n} QB-games, so their margins are the widest.</li>
+      <li><b>Chosen after seeing data.</b> The milestones, bands and inputs were picked while looking at past seasons. New inputs were chosen on 2022–24 only, so the 2025–26 column is the fairest check; the forward Results page is the honest one.</li>
       <li><b>Player stats only.</b> Projected team points and the spread are left out on purpose. Without them, the best held-out tier for RB, WR and TE stats dropped 1 to 3 points. For passing yards and passing TDs it dropped about 10 points, so QB plays are weaker than they could be.</li>
-      <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
+      <li><b>Splits.</b> Home vs. away, indoors vs. outdoors and turf vs. grass are shown on each card in Full detail. In testing, adding a player's own splits didn't improve any stat (each split rests on just a few games), so the models don't use them.</li>
       <li><b>Players.</b> A player needs ${MODEL.minGames}+ games this season or ${MODEL.minPrevGames}+ last season, and must be on nflverse's active roster (IR and practice squad are left off). A traded player shows with the new team using numbers from the old one. A backup QB stepping in has little to go on, and receivers aren't adjusted when their starting QB is out.</li>
-      <li><b>Strength of schedule.</b> Each card shows how soft or tough the defenses a player has faced were, and a schedule-adjusted average (each game scaled by how much that defense allows to the position). The adjusted average helped a little for rush attempts, receiving yards, receptions and rush + rec, so those models use it. A player's average against similar-rank defenses (soft, middle, tough) is shown too, but it added nothing in testing (each bucket has only 1 to 4 games), so the projections don't use it.</li>
-      <li><b>Defense target share.</b> The share of a defense's targets that go to each position is shown on Matchups, the Defenses tab and receiving cards. In testing it added nothing to receiving yards, receptions, rush + rec, longest catch or anytime TD, even scaled by the player's own target share, so the models don't use it.</li>
+      <li><b>Strength of schedule.</b> Full-detail cards show how soft or tough the defenses a player has faced were, and a schedule-adjusted average (each game scaled by how much that defense allows to the position). The adjusted average helped a little for rush attempts, receiving yards, receptions and rush + rec, so those models use it. A player's average against similar-rank defenses (soft, middle, tough) is shown too, but it added nothing in testing (each bucket has only 1 to 4 games), so the projections don't use it.</li>
+      <li><b>Defense target share.</b> The share of a defense's targets that go to each position is shown on Matchups, the Defenses tab and full-detail receiving cards. In testing it added nothing to receiving yards, receptions, rush + rec, longest catch or anytime TD, even scaled by the player's own target share, so the models don't use it.</li>
       <li><b>Opponent home/away and history.</b> In testing, what a defense allows at home vs. on the road helped only passing yards and completions, so only those models use it; cards show it as context for every stat. A player's own history against this opponent (usually 1–3 past games) added nothing for RB, WR or TE stats, so it's left out.</li>
-      <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only. Early in the season it rests on only a few games per defense.</li>
+      <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
       <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the chance this week already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>
     <h3>Projected lines</h3>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Stat</th><th>Games</th><th>Avg miss</th><th>Season avg miss</th><th>Over</th><th>Under</th></tr></thead><tbody>
-    ${Object.values(MARKETS).filter((m) => m.proj).map((m) => { const h = m.proj.heldOut; return `<tr><td class="t">${esc(m.label)}</td><td>${h.n}</td><td class="r">${num(h.mae)}</td><td>${num(h.maeAvg)}</td><td>${pct(h.over)}</td><td>${pct(h.under)}</td></tr>`; }).join("")}
+    ${Object.values(MARKETS).filter((m) => m.proj).map((m) => { const h = m.proj.heldOut; return `<tr><td class="t">${esc(m.label)}</td><td>${h.n.toLocaleString()}</td><td class="r">${num(h.mae)}</td><td>${num(h.maeAvg)}</td><td>${pct(h.over)}</td><td>${pct(h.under)}</td></tr>`; }).join("")}
     </tbody></table></div>
     <p class="hint">"Avg miss" is how far the projection landed from the real result, on average, in held-out games. "Season avg miss" is the same for just using the player's season average. Over and under don't add to 100% because some games land exactly on the projection, most often zero for a backup.</p>
+    <div><h3>Tested hit rates by milestone</h3>
+    <p class="hint">One panel per milestone. "Sorting" is how often the model scored a player who cleared the milestone above one who didn't: 50% is a coin flip and 100% is perfect.</p></div>
     <div class="grid2">${Object.entries(MARKETS).map(([k, m]) => Object.entries(m.lines).map(([line, s]) => `
-      <div class="panel"><h3>${esc(m.label)} ${line}+</h3>
-      <span class="count">${s.heldOut.n} held-out games · ${pct(s.heldOut.base)} cleared it overall</span>
-      <table class="data"><thead><tr><th class="t">Model score</th><th>Games</th><th>Hit</th><th>2025–26 only</th></tr></thead><tbody>
+      <div class="panel"><h3>${esc(mileText(k, line))}</h3>
+      <span class="count">${s.heldOut.n.toLocaleString()} held-out games · ${pct(s.heldOut.base)} cleared it overall${s.heldOut.auc ? ` · sorting ${pct(s.heldOut.auc)}` : ""}</span>
+      <table class="data"><thead><tr><th class="t">Model score</th><th>Games</th><th>Hit</th><th>Range</th><th>2025–26 only</th></tr></thead><tbody>
       ${[...s.tiers].reverse().map((t) => { const h = ["2025", "2026"].reduce((a, y) => t.bySeason[y] ? [a[0] + t.bySeason[y][0], a[1] + t.bySeason[y][1]] : a, [0, 0]);
-        return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n}</td><td class="r">${pct(t.hit)}</td><td>${h[1] ? `${pct(h[0] / h[1])} <span class="count">(${h[1]})</span>` : "–"}</td></tr>`; }).join("")}
+        return `<tr><td class="t">${pct(t.min)}+</td><td>${t.n.toLocaleString()}</td><td class="r">${pct(t.hit)}</td><td class="count">${t.lo == null ? "–" : rangeText([t.lo, t.hi])}</td><td>${h[1] ? `${pct(h[0] / h[1])} <span class="count">(${h[1]})</span>` : "–"}</td></tr>`; }).join("")}
       </tbody></table></div>`).join("")).join("")}</div>
   </div>`;
 }
 
+const VIEWS = { top: viewTop, matchup: viewMatchup, stats: viewStats, defense: viewDefense, results: viewResults, backtest: viewBacktest };
+const NEEDS_SLATE = new Set(["top", "matchup", "stats", "defense"]);
 function render() {
   renderTabs();
   const built = new Date(DATA.builtAt);
   $("#sub").textContent = DATA.week ? `${DATA.season} Week ${DATA.week} · built ${built.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : "No games scheduled";
-  $("#view").innerHTML = { top: viewTop, matchup: viewMatchup, stats: viewStats, defense: viewDefense, results: viewResults, backtest: viewBacktest }[state.tab]();
+  $("#view").innerHTML = !DATA.week && NEEDS_SLATE.has(state.tab)
+    ? `<div class="stack"><h2>No games scheduled</h2><p class="hint">There's no regular-season week on the schedule right now. Results and How it works are still here.</p></div>`
+    : VIEWS[state.tab]();
 }
+// The tab lives in the address bar, so Back, reload and shared links land on the same tab.
+function tabFromAddress() { const t = location.hash.slice(1); return VIEWS[t] ? t : "top"; }
+function go(tab) { if (tab !== tabFromAddress()) location.hash = tab; }
+window.addEventListener("hashchange", () => {
+  state.tab = tabFromAddress(); render(); window.scrollTo(0, 0);
+  $("#tab-" + state.tab).scrollIntoView({ block: "nearest", inline: "nearest" });
+});
+$("#tabs").addEventListener("keydown", (e) => {
+  const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  if (!step) return;
+  e.preventDefault();
+  const next = TABS[(TABS.findIndex(([k]) => k === state.tab) + step + TABS.length) % TABS.length][0];
+  go(next); $("#tab-" + next).focus();
+});
+// Each change redraws the view, so put keyboard focus back on the control that was used.
+function refocus(sel, fallback) { (document.querySelector(sel) || document.querySelector(fallback))?.focus({ preventScroll: true }); }
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-tab]");
-  if (t) { state.tab = t.dataset.tab; render(); window.scrollTo(0, 0); return; }
+  if (t) { go(t.dataset.tab); return; }
   const s = e.target.closest("button[data-set]");
   if (s) {
-    const v = s.dataset.val;
-    state[s.dataset.set] = s.dataset.set === "min" ? +v : s.dataset.set === "all" ? v === "true" : v;
-    if (s.dataset.set === "market") state.all = false;
-    render();
+    const k = s.dataset.set, v = s.dataset.val;
+    state[k] = k === "min" ? +v : k === "all" ? v === "true" : v;
+    if (k === "market") state.all = false;
+    save(); render();
+    refocus(`button[data-set="${k}"][data-val="${v}"]`, `button[data-set="${k}"]`);
   }
 });
-document.addEventListener("change", (e) => { if (e.target.matches("select[data-set]")) { state[e.target.dataset.set] = e.target.value; render(); } });
+document.addEventListener("change", (e) => {
+  if (!e.target.matches("select[data-set]")) return;
+  const k = e.target.dataset.set;
+  state[k] = e.target.value; render(); refocus(`select[data-set="${k}"]`);
+});
 $("#update-btn").addEventListener("click", update);
+state.tab = tabFromAddress();
 render();
 </script>

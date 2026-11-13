@@ -7,7 +7,9 @@ Needs numpy, pandas and scikit-learn.
 Tier hit rates are graded walk-forward only: each season from 2022 on is predicted by a model trained
 on the seasons before it (2020 through the year before). Inputs were chosen on the 2022-24 folds, so
 2025-26 are the cleanest check. The live model is refit on every season, but the board shows these
-held-out rates, not its raw output.
+held-out rates, not its raw output: a score is read off the line drawn through the tiers' (average
+score, hit rate) points. Five-point tiers read that way beat both ten-point steps and the raw score
+on 2025-26 when fitted on 2022-24.
 """
 import datetime
 import json
@@ -17,6 +19,7 @@ import sys
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression, QuantileRegressor
+from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -25,8 +28,15 @@ import features as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 SEASONS = tuple(range(2020, 2027))
 FOLDS = tuple((tuple(range(2020, y)), y) for y in range(2022, 2027))
-EDGES = [0, .2, .3, .4, .5, .6, .7, .8, .9, 1]
+EDGES = [i / 20 for i in range(21)]
 MIN_TIER = 40  # Smaller bins merge into the one below, so every tier rate rests on 40+ games.
+
+
+def wilson(hits, n, z=1.96):
+    """95% range for a hit rate from `hits` in `n` games."""
+    p, d = hits / n, 1 + z * z / n
+    mid, half = (p + z * z / (2 * n)) / d, z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** .5) / d
+    return max(0.0, mid - half), min(1.0, mid + half)
 
 
 def fit(df, inputs, y):
@@ -90,8 +100,9 @@ def tiers(p, y, season):
     out = []
     for b in merged:
         part = pd.concat(b["parts"])
+        lo, hi = wilson(int(part.y.sum()), len(part))
         out.append({"min": b["min"], "n": len(part), "hit": round(float(part.y.mean()), 3),
-                    "avgP": round(float(part.p.mean()), 3),
+                    "lo": round(lo, 3), "hi": round(hi, 3), "avgP": round(float(part.p.mean()), 4),
                     "bySeason": {str(s): [int(g.y.sum()), len(g)] for s, g in part.groupby("season")}})
     return out
 
@@ -121,18 +132,23 @@ def main(src):
             market["lines"][str(line)] = {
                 "coef": coefficients(fit(e, inputs, e[m["stat"]] >= line), inputs),
                 "tiers": tiers(p, y, s),
-                "heldOut": {"n": int(len(y)), "base": round(float(y.mean()), 3)},
+                # auc: how often a player who cleared it was scored above one who didn't.
+                "heldOut": {"n": int(len(y)), "base": round(float(y.mean()), 3), "auc": round(float(roc_auc_score(y, p)), 3),
+                            "brier": round(float(((p - y) ** 2).mean()), 4)},
             }
             t = market["lines"][str(line)]["tiers"]
-            print(f"{key} {line}+  n={len(y)} base={y.mean():.2f}  " +
+            print(f"{key} {line}+  n={len(y)} base={y.mean():.2f} auc={roc_auc_score(y, p):.3f}  " +
                   "  ".join(f"{x['min']:.0%}+:{x['hit']:.0%}({x['n']})" for x in t))
         if key != "td":  # A median of zero TDs says nothing; the TD page shows the chance instead.
             market["proj"] = projection(e, m["stat"], inputs)
             h = market["proj"]["heldOut"]
             print(f"{key} projection: MAE {h['mae']} vs season avg {h['maeAvg']}, over {h['over']:.0%} under {h['under']:.0%}")
         model["markets"][key] = market
-    with open(os.path.join(HERE, "model.json"), "w") as f:
+    # Write beside the real file and swap it in, so a crash can't leave half a model behind.
+    path = os.path.join(HERE, "model.json")
+    with open(path + ".tmp", "w") as f:
         json.dump(model, f, indent=1)
+    os.replace(path + ".tmp", path)
 
 
 if __name__ == "__main__":

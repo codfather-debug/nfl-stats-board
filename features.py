@@ -5,8 +5,10 @@ game's betting line. A row with no outcome (an upcoming game) goes through the s
 """
 import io
 import re
+import time
 import unicodedata
 import urllib.request
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -37,11 +39,22 @@ def pbp_url(season):
     return f"{NFLVERSE}/pbp/play_by_play_{season}.csv.gz"
 
 
+def fetch(url, timeout=300, tries=3):
+    """Download with a couple of retries, so one dropped connection doesn't fail a scheduled build."""
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return resp.read()
+        except OSError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(5 * (attempt + 1))
+
+
 def read_csv(src, **kw):
     compression = "gzip" if src.endswith(".gz") else "infer"
     if src.startswith("http"):
-        with urllib.request.urlopen(src, timeout=300) as resp:
-            src = io.BytesIO(resp.read())
+        src = io.BytesIO(fetch(src))
     return pd.read_csv(src, low_memory=False, compression=compression, **kw)
 
 
@@ -73,14 +86,13 @@ def surname(key):
 
 
 def team_lines(games, season):
-    """One row per team per game: implied points, margin (positive = favored), kickoff, final."""
+    """One row per team per game: opponent, venue, implied points and margin (positive = favored)."""
     g = games[(games.season == season) & (games.game_type == "REG")]
     rows = []
     for r in g.itertuples():
         spread = r.spread_line if pd.notna(r.spread_line) else np.nan
         total = r.total_line if pd.notna(r.total_line) else np.nan
         base = {"season": season, "week": int(r.week), "game_id": r.game_id, "total": total,
-                "kickoff": f"{r.gameday}T{r.gametime}:00-05:00", "final": pd.notna(r.result),
                 "indoor": int(r.roof in ("dome", "closed")), "turf": int(isinstance(r.surface, str) and r.surface != "grass")}
         rows.append({**base, "team": r.home_team, "opp": r.away_team, "home": 1,
                      "imp": (total + spread) / 2, "margin": spread})
@@ -103,8 +115,9 @@ def match_stats(snaps, stats):
     unique = by_sur.filter(lambda x: len(x) == 1).set_index(["week", "team", "sur"])
     taken = set(zip(out.loc[~miss, "week"], out.loc[~miss, "team"], out.loc[~miss, "key"]))
     missing = list(zip(out.loc[miss, "week"], out.loc[miss, "team"], out.loc[miss, "key"].map(surname)))
+    times = Counter(missing)
     for i, k in zip(out.index[miss], missing):
-        if missing.count(k) == 1 and k in unique.index and (k[0], k[1], unique.loc[k, "key"]) not in taken:
+        if times[k] == 1 and k in unique.index and (k[0], k[1], unique.loc[k, "key"]) not in taken:
             out.loc[i, STATS + ["player_id", "stats_pos"]] = unique.loc[k, STATS + ["player_id", "stats_pos"]].values
     out[STATS] = out[STATS].fillna(0)
     # Snap counts can post before box scores; leave out games whose box score isn't published yet.
@@ -209,11 +222,16 @@ PREV = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "r
         "targets", "receiving_yards", "scrimmage_yards", "rr_tds", "rz_opp", "i10_opp", "long_rush", "long_rec"]
 PRIOR_WEIGHT = 3  # Last season counts like this many games of this one.
 MIN_PREV_GAMES = 4
+# Before a player's first game of the season the last-3 average and last-game snap share don't exist.
+# Models read b_<stat>_l3 and b_snap_last, which fall back to the blended average and last season's
+# snap share instead of zero. sq_<stat> is the square root of the blended average: it lets a model
+# bend, since the chance of clearing a milestone flattens out as the average climbs. Each of these
+# lowered held-out log loss on most milestones, on 2022-24 and again on 2025-26.
 
 
 def add_prev(rows):
     p = rows[rows.played]
-    prev = p.groupby(["season", "pid"])[PREV].mean().add_prefix("prev_")
+    prev = p.groupby(["season", "pid"])[PREV + ["snap"]].mean().add_prefix("prev_")
     prev["prev_gp"] = p.groupby(["season", "pid"]).size()
     for c in ("carries", "targets"):
         prev[f"prev_{c}_sh"] = p.groupby(["season", "pid"])[c].sum() / p.groupby(["season", "pid"])["t_" + c].sum().replace(0, np.nan)
@@ -228,8 +246,11 @@ def add_prev(rows):
         rows["b_" + c] = ((now + w * rows["prev_" + c].fillna(0)) / (rows.gp + w)).fillna(0)
     for c in ("carries", "targets"):
         rows[f"b_{c}_sh"] = ((rows[c + "_sh"] * rows.gp + w * rows[f"prev_{c}_sh"].fillna(0)) / (rows.gp + w)).fillna(0)
-    rows["gp_c"] = rows.gp.clip(upper=8)
-    return rows
+    extra = {"gp_c": rows.gp.clip(upper=8), "b_snap_last": rows.snap_last.fillna(rows.prev_snap)}
+    for c in PREV:
+        extra[f"b_{c}_l3"] = rows[c + "_l3"].fillna(rows["b_" + c])
+        extra["sq_" + c] = np.sqrt(rows["b_" + c].clip(lower=0))
+    return pd.concat([rows, pd.DataFrame(extra, index=rows.index)], axis=1)
 
 
 SPLIT_STATS = ["completions", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
@@ -326,10 +347,12 @@ def defense_table(pg, season, week):
 
 
 VENUE_SHRINK = 2  # A defense's home or road split counts fully only after a few such games.
+DVP_SHRINK = 3  # Likewise for what a defense has allowed overall: two games in, it's mostly noise.
 
 
 def add_matchup(rows, pg):
     """dvp_<stat>: the opponent's allowed per game to the player's position, minus league average, before this week.
+    dvps_<stat>: the same shrunk toward zero when the defense has played few games; the models read this one.
     dvpv_<stat>: the same in the opponent's home games only (or road games only), matching this game,
     shrunk toward zero when the defense has played few such games."""
     a = allowed_by_game(pg)
@@ -341,7 +364,10 @@ def add_matchup(rows, pg):
         lg = prior.groupby("pos")[ALLOWED].mean()
         per = prior.groupby(["defense", "pos"])[ALLOWED].mean()
         diff = (per - lg.reindex(per.index.get_level_values("pos")).values).add_prefix("dvp_")
-        diff["dgp"] = prior.groupby(["defense", "pos"]).size()
+        n = prior.groupby(["defense", "pos"]).size()
+        shrunk = (per - lg.reindex(per.index.get_level_values("pos")).values).mul(n / (n + DVP_SHRINK), axis=0)
+        diff = diff.join(shrunk.add_prefix("dvps_"))
+        diff["dgp"] = n
         # drank_<stat>: 1 = allows the most to that position going into this week.
         ranks = per.groupby(level="pos").rank(ascending=False, method="min").add_prefix("drank_")
         league = pd.DataFrame(lg.reindex(per.index.get_level_values("pos")).values, index=per.index,
@@ -354,7 +380,7 @@ def add_matchup(rows, pg):
     rows = rows.merge(pd.concat(overall, ignore_index=True).rename(columns={"defense": "opp"}),
                       how="left", on=["season", "week", "opp", "pos"])
     # The defense is at home when the player is on the road.
-    rows["dhome"] = 1 - rows.home
+    rows = rows.assign(dhome=1 - rows.home)
     rows = rows.merge(pd.concat(venue, ignore_index=True).rename(columns={"defense": "opp"}),
                       how="left", on=["season", "week", "opp", "pos", "dhome"])
     return add_schedule(rows)
@@ -468,18 +494,20 @@ GAME = []
 MIN_GAMES = 2
 
 
-BLENDED = {f"{c}_g": f"b_{c}" for c in PREV} | {"carries_sh": "b_carries_sh", "targets_sh": "b_targets_sh"}
+BLENDED = {f"{c}_g": f"b_{c}" for c in PREV} | {f"{c}_l3": f"b_{c}_l3" for c in PREV} | \
+    {"carries_sh": "b_carries_sh", "targets_sh": "b_targets_sh"}
 
 
 def model_inputs(market):
     """Season averages and shares are swapped for their blends with last season, so early weeks and
-    players back from injury still have a baseline; gp_c and missed say how much this season counts."""
+    players back from injury still have a baseline; gp_c and missed say how much this season counts.
+    sq_<stat> lets the model bend at high averages (see the note above add_prev)."""
     m = MARKETS[market]
     flags = ["is" + p for p in m["pos"][1:]]
     feats = [BLENDED.get(c, c) for c in m["feats"]]
-    matchup = (["dvp_" + m["stat"]] if m.get("matchup") else []) + (["dvpv_" + m["stat"]] if m.get("venue") else []) + \
+    matchup = (["dvps_" + m["stat"]] if m.get("matchup") else []) + (["dvpv_" + m["stat"]] if m.get("venue") else []) + \
         (["adj_" + m["stat"]] if m.get("schedule") else [])
-    return feats + ["snap_last", "gp_c", "missed"] + GAME + flags + matchup
+    return feats + ["sq_" + m["stat"], "b_snap_last", "gp_c", "missed"] + GAME + flags + matchup
 
 
 def eligible(rows, market):

@@ -10,7 +10,6 @@ import json
 import math
 import os
 import sys
-import urllib.request
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -49,8 +48,7 @@ def kickoff(gameday, gametime):
 
 def injuries():
     """Latest ESPN status by team|name. Keep in step with parseInjuries in template.html."""
-    with urllib.request.urlopen(INJURIES_URL, timeout=60) as resp:
-        data = json.loads(resp.read())
+    data = json.loads(F.fetch(INJURIES_URL, timeout=60))
     latest = {}
     for team in data.get("injuries", []):
         abbr = next((a for n, a in TEAMS.items() if team.get("displayName", "").endswith(n)), None)
@@ -109,7 +107,24 @@ def project(coef, x):
 
 
 def tier_for(tiers, p):
-    return [t for t in tiers if p >= t["min"]][-1]
+    """The tier a score falls in (the lowest one if it's under every tier)."""
+    return ([t for t in tiers if p >= t["min"]] or tiers[:1])[-1]
+
+
+def rate_for(tiers, p):
+    """Tested hit rate for a score: the line through each tier's (average score, hit rate), flat past
+    the ends. Keep in step with rateFor in template.html."""
+    if p <= tiers[0]["avgP"]:
+        return tiers[0]["hit"]
+    for a, b in zip(tiers, tiers[1:]):
+        if p <= b["avgP"]:
+            return a["hit"] + (b["hit"] - a["hit"]) * (p - a["avgP"]) / (b["avgP"] - a["avgP"])
+    return tiers[-1]["hit"]
+
+
+def stale_inputs(model):
+    """Milestones whose model.json inputs no longer match features.py (a retrain is needed)."""
+    return [k for k in F.MARKETS if k not in model["markets"] or model["markets"][k]["inputs"] != F.model_inputs(k)]
 
 
 def roster_url(season):
@@ -161,7 +176,7 @@ def ruled_out(pg, up, week):
 
 
 # Shown on the page but not model inputs (or inputs some models skip).
-SHOWN = ["gp", "prev_gp", "missed", "snap_g", "snap_l3", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g",
+SHOWN = ["gp", "prev_gp", "missed", "snap_g", "snap_l3", "snap_last", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g",
          "rz_opp_sh", "vac_carries", "vac_targets"]
 # Each player's game log, for hit history. Keep in step with LOG in template.html.
 LOG = ["week", "opp", "home", "indoor", "turf", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
@@ -205,7 +220,7 @@ def score(rows, model, slate_by_team, logs, tiers):
                 p["proj"][mk] = round(project(m["proj"]["coef"], x), 1)
             for line, spec in m["lines"].items():
                 prob = predict(spec["coef"], x)
-                p["plays"][f"{mk}|{line}"] = {"p": round(prob, 4), "rate": tier_for(spec["tiers"], prob)["hit"]}
+                p["plays"][f"{mk}|{line}"] = {"p": round(prob, 4), "rate": round(rate_for(spec["tiers"], prob), 4)}
         if p["plays"]:
             players.append(p)
     return players
@@ -237,6 +252,13 @@ def defenses(pg, week):
             row["tshare"] = [round(float(tshare[(d, p)]), 3), round(float(league[p]), 3), int(trank[(d, p)])]
         out.append(row)
     return out
+
+
+def write_atomic(path, text):
+    """Write beside the file and swap it in, so a crash mid-write can't leave half a page live."""
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(path + ".tmp", path)
 
 
 def load_history():
@@ -286,6 +308,9 @@ def main(src):
     games = F.read_csv(f"{src}/games.csv" if src else F.GAMES_URL)
     with open(os.path.join(HERE, "model.json"), encoding="utf-8") as f:
         model = json.load(f)
+    if stale_inputs(model):
+        # Missing inputs would silently count as zero and skew every chance on the page.
+        sys.exit(f"model.json doesn't match features.py for {', '.join(stale_inputs(model))}; run train.py. Leaving the last page live.")
     week = upcoming_week(games)
     # Last season too: it feeds the carried-over averages.
     pg = pd.concat([F.load_season(s, games, src) for s in (SEASON - 1, SEASON)], ignore_index=True)
@@ -320,8 +345,7 @@ def main(src):
     except Exception as e:
         print(f"Could not grade results: {e}")
     os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
-    with open(HISTORY_PATH, "w", encoding="utf-8") as f:
-        json.dump(history, f, separators=(",", ":"), ensure_ascii=False)
+    write_atomic(HISTORY_PATH, json.dumps(history, separators=(",", ":"), ensure_ascii=False))
     data["results"] = history["plays"]
     # Inputs go out as arrays against one key list, which keeps the page about half the size.
     data["xCols"] = sorted({k for p in data["players"] for k in p["x"]})
@@ -330,9 +354,10 @@ def main(src):
     payload = json.dumps(data, separators=(",", ":"), ensure_ascii=False).replace("</", "<\\/")
     with open(os.path.join(HERE, "template.html"), encoding="utf-8") as f:
         html = f.read()
-    with open(os.path.join(HERE, "index.html"), "w", encoding="utf-8") as f:
-        f.write('<!doctype html>\n<html lang="en">\n<meta charset="utf-8">\n')
-        f.write(html.replace("/*__DATA__*/null", payload))
+    if "/*__DATA__*/null" not in html:
+        sys.exit("template.html has lost its data placeholder; leaving the last page live.")
+    write_atomic(os.path.join(HERE, "index.html"),
+                 '<!doctype html>\n<html lang="en">\n<meta charset="utf-8">\n' + html.replace("/*__DATA__*/null", payload))
     graded = sum(1 for e in history["plays"] if e.get("hit") is not None)
     print(f"Week {week}: {len(data['players'])} players, {len(history['plays'])} recorded plays, {graded} graded.")
 
