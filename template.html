@@ -390,6 +390,8 @@ function trend(now, before) {
   const d = now - before;
   return Math.abs(d) < 0.03 ? "" : d > 0 ? ' <span class="soft">▲</span>' : ' <span class="tough">▼</span>';
 }
+// Season total of a per-game stat: counts this small read better as totals than averages.
+function total(p, stat) { return Math.round((p.x[stat + "_g"] || 0) * (p.x.gp || 0)); }
 function roleLine(p, mk) {
   if (PASSING.has(mk)) return "";
   const x = p.x, bits = [];
@@ -398,6 +400,10 @@ function roleLine(p, mk) {
   if (showC) bits.push(`Carry share <b>${pct(x.carries_sh)}</b> (last 3: ${pct(x.carries_sh3)}${trend(x.carries_sh3, x.carries_sh)})`);
   if (showT) bits.push(`Target share <b>${pct(x.targets_sh)}</b> (last 3: ${pct(x.targets_sh3)}${trend(x.targets_sh3, x.targets_sh)})`);
   if (mk === "td") bits.push(`Red zone <b>${num(x.rz_opp_g)}</b>/g · inside 10 <b>${num(x.i10_opp_g)}</b>/g · ${pct(x.rz_opp_sh)} of team RZ`);
+  if (mk === "td" && x.gp > 0) {
+    bits.push(`Red zone targets <b>${total(p, "rz_tgt")}</b> · carries <b>${total(p, "rz_car")}</b> this season`);
+    bits.push(`Stopped short of a TD: <b>${total(p, "near5")}</b> inside the 5 · <b>${total(p, "near20")}</b> inside the 20`);
+  }
   if (x.missed > 0) bits.push(`<span class="flag">Back</span> after missing ${x.missed} game${x.missed === 1 ? "" : "s"} · numbers are from before`);
   const vc = x.vac_carries || 0, vt = x.vac_targets || 0;
   if ((showC && vc >= 0.05) || (showT && vt >= 0.05))
@@ -451,12 +457,12 @@ function viewStats() {
   const cls = (r) => rateClass(r) || (r < 0.3 ? "h1" : "");
   return `<div class="stack">
     <div><h2>${esc(m.label)}</h2><p class="hint">Chance this week for each milestone, highest first.</p>
-    ${how(`Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).`)}</div>
+    ${how(`Avg is this season's per-game number in games played. Proj is the model's projected line for this game: the player should finish above it about half the time. Under each name is the share of team targets (tgt) or carries (car) this season, with ▲/▼ for the last-3 trend. Under each rate is how many games this season the player cleared it. After the matchup, the opponent's rank in that stat allowed to the player's position (1st = allows the most).${mk === "td" ? " RZ tgt and RZ car are this season's targets and carries inside the 20. In 5 is how many runs or catches ended inside the 5 without scoring. These three are context: they did not improve the TD chance when tested." : ""}`)}</div>
     <div class="filters">${seg("market", Object.entries(MARKETS).map(([k, v]) => [k, v.label]), mk, "Stat", "pills")}</div>
     <div class="filters"><select data-set="game" aria-label="Game"><option value="">All games</option>${games.map((g) => `<option value="${g.team}" ${state.game === g.team ? "selected" : ""}>${esc(g.opp)} @ ${esc(g.team)}</option>`).join("")}</select><span class="count">${rows.length} players</span></div>
-    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Player</th><th>Avg</th><th>${m.proj ? "Proj" : "L3"}</th>${mk === "td" ? "<th>RZ tgt</th><th>RZ car</th><th>In 5</th>" : ""}${lines.map((l) => `<th>${mk === "td" ? "TD" : l + "+"}</th>`).join("")}</tr></thead><tbody>
     ${shown.map((p) => { const g = gameOf(p.team); return `<tr${started(p.team) || !available(p) ? ' class="dim"' : ""}><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}<div class="count">${esc(p.team)} ${g.home ? "vs" : "@"} ${esc(p.opp)}${PASSING.has(mk) ? "" : ` · ${RECEIVING.has(mk) || p.pos !== "RB" ? `${pct(p.x.targets_sh)} tgt${trend(p.x.targets_sh3, p.x.targets_sh)}` : `${pct(p.x.carries_sh)} car${trend(p.x.carries_sh3, p.x.carries_sh)}`}`}${(() => { const u = matchup(p, m.stat); return u ? ` · ${esc(p.opp)} D <span class="${rankClass(u.rank)}">${ord(u.rank)}-most allowed</span>` : ""; })()}</div></td>
-      <td>${num(p.x[m.stat + "_g"])}</td><td>${m.proj ? `<b>${num(p.proj[mk])}</b>` : num(p.x[m.stat + "_l3"])}</td>
+      <td>${num(p.x[m.stat + "_g"])}</td><td>${m.proj ? `<b>${num(p.proj[mk])}</b>` : num(p.x[m.stat + "_l3"])}</td>${mk === "td" ? ["rz_tgt", "rz_car", "near5"].map((c) => `<td>${p.x.gp ? total(p, c) : "–"}</td>`).join("") : ""}
       ${lines.map((l) => { const r = p.plays[`${mk}|${l}`].rate, h = hitHistory(p, m.stat, +l); return `<td class="r ${cls(r)}">${pct(r)}<span class="hh">${h.hits}/${h.games}</span></td>`; }).join("")}</tr>`; }).join("")}
     </tbody></table></div>
     ${rows.length > 40 ? `<button class="more" data-set="all" data-val="${!state.all}">${state.all ? "Show top 40" : `Show all ${rows.length}`}</button>` : ""}
@@ -563,7 +569,7 @@ function teamPanel(team, opp) {
       return `<div><div class="mu">${esc(opp)} allows to ${dl}</div>
       <div class="tablebox"><table class="data mt"><thead><tr><th class="t">${label}</th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>
       ${ps.map((p) => { const b = bestOf(p); return `<tr><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}${p.x.missed > 0 ? '<span class="flag">Back</span>' : ""}
-        <div class="count">${pct(usage(p))} snaps${p.pos !== "QB" ? ` · ${shareText(p)}` : ""}${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div></td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
+        <div class="count">${pct(usage(p))} snaps${p.pos !== "QB" ? ` · ${shareText(p)}` : ""}${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div>${p.pos !== "QB" && p.x.gp ? `<div class="count">Red zone: ${total(p, "rz_tgt")} tgt · ${total(p, "rz_car")} car · stopped inside the 5: ${total(p, "near5")}</div>` : ""}</td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
       </tbody></table></div></div>`;
     }).join("")}
   </div>`;
@@ -575,7 +581,7 @@ function viewMatchup() {
   const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
   return `<div class="stack">
     <div><h2>Matchups</h2><p class="hint">Each team's starters for the game, with projected lines and what the other defense allows.</p>
-    ${how(`Starters are the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. Defense ranks run 1st (allows the most) to 32nd.`)}</div>
+    ${how(`Starters are the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. The red zone line is this season's targets and carries inside the 20, and how many runs or catches ended inside the 5 without scoring. Defense ranks run 1st (allows the most) to 32nd.`)}</div>
     <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
     <span class="count">${where}</span></div>
     <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
@@ -626,6 +632,7 @@ function viewBacktest() {
       <li><b>Opponent home/away and history.</b> In testing, what a defense allows at home vs. on the road helped only passing yards and completions, so only those models use it; cards show it as context for every stat. A player's own history against this opponent (usually 1–3 past games) added nothing for RB, WR or TE stats, so it's left out.</li>
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
+      <li><b>Near misses.</b> Anytime TD cards show red zone targets and carries separately, and how often a run or catch ended inside the 5 or the 20 without scoring. Tested as inputs to the TD chance, none of them changed its accuracy on held-out seasons: the red zone and inside-10 touches already in the model carry the same information. They're shown as context only.</li>
       <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the chance this week already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>

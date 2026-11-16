@@ -206,7 +206,7 @@ def ruled_out(pg, up, week):
 
 # Shown on the page but not model inputs (or inputs some models skip).
 SHOWN = ["gp", "prev_gp", "missed", "snap_g", "snap_l3", "snap_last", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g",
-         "rz_opp_sh", "vac_carries", "vac_targets"]
+         "rz_opp_sh", "vac_carries", "vac_targets", "rz_tgt_g", "rz_car_g", "near5_g", "near20_g"]
 # Each player's game log, for hit history. Keep in step with LOG in template.html.
 LOG = ["week", "opp", "home", "indoor", "turf", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
        "long_rec", "rr_tds", "rz_opp", "completions", "attempts", "passing_yards", "passing_tds"]

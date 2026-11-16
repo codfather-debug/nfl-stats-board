@@ -21,8 +21,9 @@ POS_ALIASES = {"FB": "RB", "HB": "RB"}
 STATS = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards", "rushing_tds",
          "receptions", "targets", "receiving_yards", "receiving_tds"]
 # Per-game usage taken from play-by-play: red zone (inside the 20) and goal line (inside the 10)
-# carries plus targets, and the longest rush and catch.
-PBP = ["rz_opp", "i10_opp", "long_rush", "long_rec"]
+# carries plus targets, and the longest rush and catch. rz_tgt and rz_car split the red zone count;
+# near5 and near20 count runs and catches that ended inside the 5 or the 20 without scoring.
+PBP = ["rz_opp", "i10_opp", "long_rush", "long_rec", "rz_tgt", "rz_car", "near5", "near20"]
 PBP_COLS = ["season_type", "week", "posteam", "play_type", "rusher_player_id", "receiver_player_id",
             "yards_gained", "complete_pass", "yardline_100", "two_point_attempt"]
 
@@ -65,10 +66,16 @@ def pbp_usage(pbp):
     p = p[p.pid.notna()]
     p["rz_opp"] = (p.yardline_100 <= 20).astype(int)
     p["i10_opp"] = (p.yardline_100 <= 10).astype(int)
+    run, caught = p.play_type == "run", (p.play_type == "pass") & (p.complete_pass == 1)
+    p["rz_tgt"] = ((p.yardline_100 <= 20) & ~run).astype(int)
+    p["rz_car"] = ((p.yardline_100 <= 20) & run).astype(int)
+    end = p.yardline_100 - p.yards_gained
+    for n in (5, 20):
+        p[f"near{n}"] = ((run | caught) & (end > 0) & (end <= n)).astype(int)
     p["long_rush"] = np.where(p.play_type == "run", p.yards_gained, 0)
     p["long_rec"] = np.where((p.play_type == "pass") & (p.complete_pass == 1), p.yards_gained, 0)
-    out = p.groupby(["week", "posteam", "pid"]).agg(rz_opp=("rz_opp", "sum"), i10_opp=("i10_opp", "sum"),
-                                                    long_rush=("long_rush", "max"), long_rec=("long_rec", "max"))
+    out = p.groupby(["week", "posteam", "pid"]).agg(
+        **{c: (c, "max" if c.startswith("long_") else "sum") for c in PBP})
     return out.reset_index().rename(columns={"posteam": "team", "pid": "player_id"})
 
 
@@ -148,7 +155,7 @@ def player_games(season, snaps, stats, pbp):
 # Per-game volume and production averaged over a player's earlier games.
 ROLLING = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards",
            "receptions", "targets", "receiving_yards", "scrimmage_yards", "snap", "rr_tds",
-           "rz_opp", "i10_opp", "long_rush", "long_rec"]
+           *PBP]
 SHARES = ["carries", "targets", "rz_opp", "i10_opp"]
 
 
@@ -455,6 +462,9 @@ def load_season(season, games, src=None):
 # similar-rank defenses (sim_) and plain strength of schedule (sos_) didn't help any stat.
 # Nor did the share of a defense's targets that go to the position (tested for receiving yards,
 # receptions, rush + rec, longest catch and anytime TD), so it's shown on the page only.
+# For anytime TD, splitting red zone touches into targets and carries, and counting plays stopped
+# inside the 5, 10 or 20, moved held-out log loss by under 0.0005 either way (the inputs kept in
+# the audit moved it by about 0.003), so those are shown on the TD cards and not fed to the model.
 MARKETS = {
     "rush_yds": {"label": "Rushing yards", "stat": "rushing_yards", "pos": ["RB", "QB"], "lines": [40, 60, 80],
                  "matchup": True,

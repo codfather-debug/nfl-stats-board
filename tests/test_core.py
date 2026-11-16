@@ -17,6 +17,24 @@ import features as F  # noqa: E402
 import train  # noqa: E402
 
 
+class PlayByPlay(unittest.TestCase):
+    def test_red_zone_split_and_near_misses(self):
+        import pandas as pd
+        play = {"season_type": "REG", "week": 1, "posteam": "DET", "two_point_attempt": 0,
+                "rusher_player_id": None, "receiver_player_id": None, "complete_pass": 0}
+        pbp = pd.DataFrame([
+            play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 12, "yards_gained": 9},   # ends at the 3
+            play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 3, "yards_gained": 3},    # scores
+            play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 40, "yards_gained": 25},  # ends at the 15
+            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 18, "yards_gained": 14, "complete_pass": 1},
+            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 8, "yards_gained": 0},  # incomplete
+        ])
+        out = F.pbp_usage(pbp).set_index("player_id")
+        self.assertEqual([int(out.loc["A", c]) for c in ("rz_opp", "rz_car", "rz_tgt", "near5", "near20")], [2, 2, 0, 1, 2])
+        self.assertEqual([int(out.loc["B", c]) for c in ("rz_opp", "rz_car", "rz_tgt", "near5", "near20")], [2, 0, 2, 1, 1])
+        self.assertEqual(int(out.loc["A", "long_rush"]), 25)
+
+
 class Names(unittest.TestCase):
     def test_norm_name(self):
         self.assertEqual(F.norm_name("Kenneth Walker III"), "kenneth walker")
