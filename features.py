@@ -23,9 +23,26 @@ STATS = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "
 # Per-game usage taken from play-by-play: red zone (inside the 20) and goal line (inside the 10)
 # carries plus targets, and the longest rush and catch. rz_tgt and rz_car split the red zone count;
 # near5 and near20 count runs and catches that ended inside the 5 or the 20 without scoring.
-PBP = ["rz_opp", "i10_opp", "long_rush", "long_rec", "rz_tgt", "rz_car", "near5", "near20"]
+PBP_BASE = ["rz_opp", "i10_opp", "long_rush", "long_rec", "rz_tgt", "rz_car", "near5", "near20"]
+# Target zones: how far past the line of scrimmage the ball was thrown, and to which side. Deep throws
+# (20+ yards) are one zone; split three ways they're too few per defense to mean much.
+# tz_<zone> counts targets there and yz_<zone> the receiving yards from them, per player per game.
+ZONES = ["behind", "short_left", "short_middle", "short_right", "mid_left", "mid_middle", "mid_right", "deep"]
+ZONE_T = ["tz_" + z for z in ZONES]
+ZONE_Y = ["yz_" + z for z in ZONES]
+PBP = PBP_BASE + ZONE_T + ZONE_Y
 PBP_COLS = ["season_type", "week", "posteam", "play_type", "rusher_player_id", "receiver_player_id",
-            "yards_gained", "complete_pass", "yardline_100", "two_point_attempt"]
+            "yards_gained", "complete_pass", "yardline_100", "two_point_attempt", "air_yards", "pass_location"]
+
+
+def zone_of(air_yards, side):
+    """Target zone for each throw (array in, array out); '' where depth or side is missing."""
+    air = pd.Series(air_yards, dtype=float)
+    side = pd.Series(side, dtype=object, index=air.index)
+    depth = np.select([air < 0, air < 10, air < 20], ["behind", "short", "mid"], "deep")
+    zone = np.where(np.isin(depth, ["behind", "deep"]), depth, pd.Series(depth, index=air.index) + "_" + side.fillna(""))
+    ok = air.notna() & (np.isin(depth, ["behind", "deep"]) | side.isin(["left", "middle", "right"]))
+    return np.where(ok, zone, "")
 
 
 def snaps_url(season):
@@ -74,6 +91,10 @@ def pbp_usage(pbp):
         p[f"near{n}"] = ((run | caught) & (end > 0) & (end <= n)).astype(int)
     p["long_rush"] = np.where(p.play_type == "run", p.yards_gained, 0)
     p["long_rec"] = np.where((p.play_type == "pass") & (p.complete_pass == 1), p.yards_gained, 0)
+    zone = zone_of(p.air_yards.where(~run), p.pass_location.where(~run))
+    for z in ZONES:
+        p["tz_" + z] = (zone == z).astype(int)
+        p["yz_" + z] = np.where((zone == z) & caught, p.yards_gained, 0)
     out = p.groupby(["week", "posteam", "pid"]).agg(
         **{c: (c, "max" if c.startswith("long_") else "sum") for c in PBP})
     return out.reset_index().rename(columns={"posteam": "team", "pid": "player_id"})
@@ -155,7 +176,7 @@ def player_games(season, snaps, stats, pbp):
 # Per-game volume and production averaged over a player's earlier games.
 ROLLING = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards",
            "receptions", "targets", "receiving_yards", "scrimmage_yards", "snap", "rr_tds",
-           *PBP]
+           *PBP_BASE, *ZONE_T]
 SHARES = ["carries", "targets", "rz_opp", "i10_opp"]
 
 
@@ -206,7 +227,7 @@ def add_features(pg, upcoming=None, out=()):
     rows = add_prev(rows)
     for p in POSITIONS:
         rows["is" + p] = (rows.pos == p).astype(int)
-    return add_matchup(rows, pg)
+    return add_zones(add_matchup(rows, pg), pg)
 
 
 def add_missed(rows, pg):
@@ -226,7 +247,8 @@ def add_missed(rows, pg):
 # Last season, carried into this one: per-game averages over games played, and the share of team
 # carries and targets. b_<stat> blends it with this season, leaning on last season while gp is small.
 PREV = ["completions", "attempts", "passing_yards", "passing_tds", "carries", "rushing_yards", "receptions",
-        "targets", "receiving_yards", "scrimmage_yards", "rr_tds", "rz_opp", "i10_opp", "long_rush", "long_rec"]
+        "targets", "receiving_yards", "scrimmage_yards", "rr_tds", "rz_opp", "i10_opp", "long_rush", "long_rec",
+        *ZONE_T]
 PRIOR_WEIGHT = 3  # Last season counts like this many games of this one.
 MIN_PREV_GAMES = 4
 # Before a player's first game of the season the last-3 average and last-game snap share don't exist.
@@ -351,6 +373,66 @@ def defense_table(pg, season, week):
         per[c + "_lg"] = per.groupby("pos")[c].transform("mean")
         per[c + "_rank"] = per.groupby("pos")[c].rank(ascending=False, method="min")
     return per
+
+
+ZONE_SHRINK = 20  # A defense's yards per target in a zone counts fully only after a good number of targets.
+
+
+def zone_allowed(pg):
+    """Targets and receiving yards each defense allowed in each zone, per game."""
+    return pg.groupby(["season", "week", "opp"])[ZONE_T + ZONE_Y].sum().reset_index().rename(columns={"opp": "defense"})
+
+
+def zone_table(pg, season, week):
+    """Each defense's yards per target allowed by zone in games before `week`, with targets, league
+    average and rank (1 = allows the most). For the page."""
+    a = zone_allowed(pg)
+    a = a[(a.season == season) & (a.week < week)]
+    per = a.groupby("defense")[ZONE_T + ZONE_Y].sum()
+    out = pd.DataFrame(index=per.index)
+    for z in ZONES:
+        t, y = per["tz_" + z], per["yz_" + z]
+        out[z] = y / t.replace(0, np.nan)
+        out[z + "_n"] = t
+        out[z + "_lg"] = y.sum() / max(t.sum(), 1)
+        out[z + "_rank"] = out[z].rank(ascending=False, method="min")
+    return out.reset_index()
+
+
+def add_zones(rows, pg):
+    """How the player's targets line up with where this week's defense gives up yards.
+
+    The player's share of targets by zone comes from b_tz_<zone> (this season blended with last).
+    The defense's yards per target in each zone, before this week, is shrunk toward the league
+    figure for that zone. zone_ypt is the player's zones weighted by the defense's figures,
+    zone_lg the same with league figures, and zone_edge the gap in yards per target: positive
+    means the defense is weak where the player is thrown to. zone_x is that edge times the
+    player's blended targets per game, in yards."""
+    a = zone_allowed(pg)
+    frames = []
+    for s, w in rows[["season", "week"]].drop_duplicates().itertuples(index=False):
+        prior = a[(a.season == s) & (a.week < w)]
+        if not len(prior):
+            continue
+        per = prior.groupby("defense")[ZONE_T + ZONE_Y].sum()
+        lg_t, lg_y = per[ZONE_T].sum().values, per[ZONE_Y].sum().values
+        lg = lg_y / np.maximum(lg_t, 1)
+        ypt = (per[ZONE_Y].values + ZONE_SHRINK * lg) / (per[ZONE_T].values + ZONE_SHRINK)
+        f = pd.DataFrame(ypt, index=per.index, columns=["dz_" + z for z in ZONES])
+        for z, v in zip(ZONES, lg):
+            f["lgz_" + z] = v
+        frames.append(f.reset_index().rename(columns={"defense": "opp"}).assign(season=s, week=w))
+    rows = rows.merge(pd.concat(frames, ignore_index=True), how="left", on=["season", "week", "opp"])
+    share = rows[["b_tz_" + z for z in ZONES]].to_numpy()
+    tot = share.sum(axis=1, keepdims=True)
+    share = np.divide(share, tot, out=np.zeros_like(share), where=tot > 0)
+    dz, lgz = rows[["dz_" + z for z in ZONES]].to_numpy(), rows[["lgz_" + z for z in ZONES]].to_numpy()
+    extra = {"zone_ypt": np.nansum(share * dz, axis=1), "zone_lg": np.nansum(share * lgz, axis=1)}
+    extra["zone_edge"] = np.where(np.isnan(dz).all(axis=1) | (tot[:, 0] == 0), 0, extra["zone_ypt"] - extra["zone_lg"])
+    extra["zone_x"] = extra["zone_edge"] * rows.b_targets.fillna(0)
+    for i, z in enumerate(ZONES):
+        extra["zsh_" + z] = share[:, i]
+    return pd.concat([rows, pd.DataFrame(extra, index=rows.index)], axis=1)
 
 
 VENUE_SHRINK = 2  # A defense's home or road split counts fully only after a few such games.

@@ -21,18 +21,31 @@ class PlayByPlay(unittest.TestCase):
     def test_red_zone_split_and_near_misses(self):
         import pandas as pd
         play = {"season_type": "REG", "week": 1, "posteam": "DET", "two_point_attempt": 0,
-                "rusher_player_id": None, "receiver_player_id": None, "complete_pass": 0}
+                "rusher_player_id": None, "receiver_player_id": None, "complete_pass": 0,
+                "air_yards": None, "pass_location": None}
         pbp = pd.DataFrame([
             play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 12, "yards_gained": 9},   # ends at the 3
             play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 3, "yards_gained": 3},    # scores
             play | {"play_type": "run", "rusher_player_id": "A", "yardline_100": 40, "yards_gained": 25},  # ends at the 15
-            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 18, "yards_gained": 14, "complete_pass": 1},
-            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 8, "yards_gained": 0},  # incomplete
+            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 18, "yards_gained": 14, "complete_pass": 1,
+                     "air_yards": 12, "pass_location": "left"},
+            play | {"play_type": "pass", "receiver_player_id": "B", "yardline_100": 8, "yards_gained": 0,
+                     "air_yards": 7, "pass_location": "middle"},  # incomplete
         ])
         out = F.pbp_usage(pbp).set_index("player_id")
         self.assertEqual([int(out.loc["A", c]) for c in ("rz_opp", "rz_car", "rz_tgt", "near5", "near20")], [2, 2, 0, 1, 2])
         self.assertEqual([int(out.loc["B", c]) for c in ("rz_opp", "rz_car", "rz_tgt", "near5", "near20")], [2, 0, 2, 1, 1])
         self.assertEqual(int(out.loc["A", "long_rush"]), 25)
+        # Zones: B's catch 12 yards downfield to the left, and an incompletion short middle; runs get none.
+        self.assertEqual(int(out.loc["B", "tz_mid_left"]), 1)
+        self.assertEqual(int(out.loc["B", "yz_mid_left"]), 14)
+        self.assertEqual(int(out.loc["B", "tz_short_middle"]), 1)
+        self.assertEqual(int(out.loc["B", "yz_short_middle"]), 0)
+        self.assertEqual(int(out.loc["A", F.ZONE_T].sum()), 0)
+
+    def test_zone_of(self):
+        got = F.zone_of([-3, 0, 9, 10, 19, 20, 35, None, 5], ["left", "middle", "right", "left", "right", None, "left", "left", None])
+        self.assertEqual(list(got), ["behind", "short_middle", "short_right", "mid_left", "mid_right", "deep", "deep", "", ""])
 
 
 class Names(unittest.TestCase):

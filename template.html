@@ -173,6 +173,31 @@ const COL_LABEL = { passing_yards: "Pass yds", passing_tds: "Pass TD", completio
   carries: "Carries", scrimmage_yards: "Rush+rec", receptions: "Rec", receiving_yards: "Rec yds", targets: "Targets", rr_tds: "TDs", tshare: "Tgt share" };
 const ord = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 const rankClass = (r) => r <= 8 ? "soft" : r >= 25 ? "tough" : "";
+// Pass zones: depth past the line of scrimmage (short 0-9 yards, mid 10-19, deep 20+) and side.
+const ZONES = ["behind", "short_left", "short_middle", "short_right", "mid_left", "mid_middle", "mid_right", "deep"];
+const ZONE_LABEL = { behind: "Behind line", short_left: "Short L", short_middle: "Short M", short_right: "Short R",
+  mid_left: "Mid L", mid_middle: "Mid M", mid_right: "Mid R", deep: "Deep" };
+const ZONE_DEF = Object.fromEntries((DATA.zones || []).map((d) => [d.team, d.z]));
+// The player's three most-thrown-to zones, as [zone, share], busiest first.
+function topZones(p, n = 3) {
+  return ZONES.map((z) => [z, p.x["zsh_" + z] || 0]).filter(([, s]) => s >= 0.05).sort((a, b) => b[1] - a[1]).slice(0, n);
+}
+const signed = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+function zoneFit(p) {
+  const e = p.x.zone_edge;
+  if (e == null || !ZONE_DEF[p.opp]) return "";
+  const cls = e >= 0.5 ? "soft" : e <= -0.5 ? "tough" : "";
+  return Math.abs(e) < 0.05 ? `zone fit vs ${esc(p.opp)} <b>even</b>` : `zone fit vs ${esc(p.opp)} <b class="${cls}">${signed(e)}</b> yds/target`;
+}
+// Two lines for a card: where the player is thrown to, and what this week's defense allows there.
+function zoneLines(p) {
+  const top = topZones(p), d = ZONE_DEF[p.opp];
+  if (!top.length) return "";
+  const where = `<div class="mu">Thrown to: ${top.map(([z, s]) => `${ZONE_LABEL[z]} <b>${pct(s)}</b>`).join(" · ")}</div>`;
+  if (!d) return where;
+  const there = top.filter(([z]) => d[z]).map(([z]) => `${ZONE_LABEL[z]} <b>${num(d[z][0])}</b> <span class="${rankClass(d[z][2]) || "count"}">(${ord(d[z][2])})</span>`);
+  return where + `<div class="mu">${esc(p.opp)} allows per target: ${there.join(" · ")} · ${zoneFit(p)}</div>`;
+}
 function matchup(p, stat) { const d = DEF[`${p.opp}|${p.pos}`]; return d && d[stat] ? { v: d[stat][0], lg: d[stat][1], rank: d[stat][2], games: d.games } : null; }
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -344,6 +369,7 @@ function viewTop() {
       : `<p class="hint">No upcoming plays at this level. Try a lower bar, or check back when next week's lines post.</p>`}
   </div>`;
 }
+const ZONE_STATS = new Set(["rec_yds", "receptions", "long_rec", "scrimmage", "td"]);
 function card(x) {
   const p = x.pl, m = MARKETS[x.mk], g = gameOf(p.team), t = tierInfo(x.mk, x.line, x.p), full = state.detail === "1";
   const margin = t.lo == null ? "" : `, give or take ${Math.max(1, Math.round((t.hi - t.lo) * 50))} points`;
@@ -358,6 +384,7 @@ function card(x) {
     ${state.min === PERFECT ? "" : histLine(p, m, x.line)}
     ${muLine(p, m, full)}
     ${full ? scheduleLine(p, m) : ""}
+    ${full && ZONE_STATS.has(x.mk) && p.pos !== "QB" ? zoneLines(p) : ""}
     ${roleLine(p, x.mk)}
     <div class="l3">${projText(p, x.mk)}${p.x.gp ? `Avg <b>${num(p.x[m.stat + "_g"])}</b> · last 3 <b>${num(p.x[m.stat + "_l3"])}</b> · ` : ""}${p.x.prev_gp ? `last season <b>${num(p.x["prev_" + m.stat])}</b> <span class="count">(${p.x.prev_gp}g)</span> · ` : ""}${x.mk === "td" && p.tdBoard != null ? `chance from the <a href="${TD_BOARD}">NFL TD Board</a>, which also uses the betting line` : `chance based on ${t.n.toLocaleString()} past games like this${margin}`}</div>
     ${full ? splitLine(p, m, g) : ""}
@@ -569,7 +596,7 @@ function teamPanel(team, opp) {
       return `<div><div class="mu">${esc(opp)} allows to ${dl}</div>
       <div class="tablebox"><table class="data mt"><thead><tr><th class="t">${label}</th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>
       ${ps.map((p) => { const b = bestOf(p); return `<tr><td class="t who"><span class="chip ${p.pos}">${p.pos}</span> ${esc(p.player)}${statusFlag(p.status)}${p.x.missed > 0 ? '<span class="flag">Back</span>' : ""}
-        <div class="count">${pct(usage(p))} snaps${p.pos !== "QB" ? ` · ${shareText(p)}` : ""}${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div>${p.pos !== "QB" && p.x.gp ? `<div class="count">Red zone: ${total(p, "rz_tgt")} tgt · ${total(p, "rz_car")} car · stopped inside the 5: ${total(p, "near5")}</div>` : ""}</td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
+        <div class="count">${pct(usage(p))} snaps${p.pos !== "QB" ? ` · ${shareText(p)}` : ""}${b ? ` · best: ${esc(mileLabel(b.mk, b.line))} <b class="${b.rate >= 0.7 ? "soft" : ""}">${pct(b.rate)}</b>` : ""}</div>${p.pos !== "QB" && p.x.gp ? `<div class="count">Red zone: ${total(p, "rz_tgt")} tgt · ${total(p, "rz_car")} car · stopped inside the 5: ${total(p, "near5")}</div>` : ""}${p.pos !== "QB" && topZones(p).length ? `<div class="count">Thrown to: ${topZones(p, 2).map(([z, s]) => `${ZONE_LABEL[z]} ${pct(s)}`).join(" · ")}${zoneFit(p) ? ` · ${zoneFit(p)}` : ""}</div>` : ""}</td>${cols.map(([mk]) => mCell(p, mk)).join("")}</tr>`; }).join("")}
       </tbody></table></div></div>`;
     }).join("")}
   </div>`;
@@ -581,21 +608,36 @@ function viewMatchup() {
   const where = [g.indoor ? "indoors" : "outdoors", g.turf ? "turf" : "grass"].join(", ");
   return `<div class="stack">
     <div><h2>Matchups</h2><p class="hint">Each team's starters for the game, with projected lines and what the other defense allows.</p>
-    ${how(`Starters are the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. The red zone line is this season's targets and carries inside the 20, and how many runs or catches ended inside the 5 without scoring. Defense ranks run 1st (allows the most) to 32nd.`)}</div>
+    ${how(`Starters are the most-used healthy QB, two RBs, three WRs and TE, by snap share over the last 3 games. Bold numbers are projected lines; under each is the season average (or last season's, early on). TD is the chance of an anytime TD. Under each name: snap share, share of team carries (car) and targets (tgt) this season, with ▲/▼ when the last 3 games run 3+ points above or below, then "best", the milestone with the best chance this week. "Thrown to" is the player's two busiest pass zones (see Defenses → Pass zones), and zone fit is how many more yards per target than average this defense allows across all the player's zones. The red zone line is this season's targets and carries inside the 20, and how many runs or catches ended inside the 5 without scoring. Defense ranks run 1st (allows the most) to 32nd.`)}</div>
     <div class="filters"><select data-set="mgame" aria-label="Game">${games.map((x) => `<option value="${x.team}" ${x === g ? "selected" : ""}>${esc(x.opp)} @ ${esc(x.team)} · ${kickTime(x.kickoff).toLocaleDateString([], { weekday: "short" })} ${timeLabel(kickTime(x.kickoff))}${started(x.team) ? " (started)" : ""}</option>`).join("")}</select>
     <span class="count">${where}</span></div>
     <div class="grid2">${teamPanel(g.opp, g.team)}${teamPanel(g.team, g.opp)}</div>
   </div>`;
 }
 
+function viewZones() {
+  const sort = ZONES.includes(state.dsort) ? state.dsort : "deep", lg = DATA.zoneLg || {};
+  const rows = (DATA.zones || []).slice().sort((a, b) => (a.z[sort]?.[2] ?? 99) - (b.z[sort]?.[2] ?? 99));
+  const opp = Object.fromEntries(DATA.slate.map((g) => [g.opp, g.team]));
+  return `<div class="stack">
+    <div><h2>Defense by pass zone</h2><p class="hint">Receiving yards allowed per target in each zone this season, through Week ${DATA.week - 1}. Tap a column to sort.</p>
+    ${how(`A zone is how far past the line of scrimmage the ball was thrown (short: 0–9 yards, mid: 10–19, deep: 20+) and to which side. Yards per target counts incompletions as zero, so it reflects both how often passes there are caught and how far they go. Ranks run from 1st (allows the most) to 32nd; green is top 8, red bottom 8. Small numbers under each figure are the targets it rests on: deep and mid zones see few, so their ranks move a lot week to week.`)}</div>
+    <div class="filters">${seg("dpos", [["QB", "QBs"], ["RB", "RBs"], ["WR", "WRs"], ["TE", "TEs"], ["ZONES", "Pass zones"]], "ZONES", "Position")}</div>
+    <div class="tablebox"><table class="data"><thead><tr><th class="t">Defense</th><th class="t">Faces</th>${ZONES.map((z) => `<th${z === sort ? ' aria-sort="descending"' : ""}><button data-set="dsort" data-val="${z}">${ZONE_LABEL[z]}</button></th>`).join("")}</tr></thead><tbody>
+    ${rows.map((d) => `<tr><td class="t who">${esc(d.team)}</td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${ZONES.map((z) => d.z[z] ? `<td><span class="${rankClass(d.z[z][2])}">${num(d.z[z][0])}</span><span class="hh">${d.z[z][1]} tgt</span></td>` : "<td>–</td>").join("")}</tr>`).join("")}
+    </tbody></table></div>
+    <p class="hint">League average: ${ZONES.map((z) => `${ZONE_LABEL[z]} ${num(lg[z])}`).join(" · ")} yards per target.</p>
+  </div>`;
+}
 function viewDefense() {
+  if (state.dpos === "ZONES") return viewZones();
   const pos = state.dpos, cols = DEF_COLS[pos], sort = cols.includes(state.dsort) ? state.dsort : cols[0];
   const rows = (DATA.defenses || []).filter((d) => d.pos === pos).sort((a, b) => (a[sort]?.[2] ?? 99) - (b[sort]?.[2] ?? 99));
   const opp = Object.fromEntries(DATA.slate.map((g) => [g.opp, g.team]));
   return `<div class="stack">
     <div><h2>Defense vs. position</h2><p class="hint">Per game allowed to each position this season, through Week ${DATA.week - 1}. Tap a column to sort.</p>
     ${how(`Ranks run from 1st (allows the most, the softest matchup) to 32nd. Green is a top-8 soft matchup and red is a bottom-8 tough one. Rows for defenses facing a team this week show the opponent.`)}</div>
-    <div class="filters">${seg("dpos", ["QB", "RB", "WR", "TE"].map((p) => [p, p + "s"]), pos, "Position")}</div>
+    <div class="filters">${seg("dpos", [["QB", "QBs"], ["RB", "RBs"], ["WR", "WRs"], ["TE", "TEs"], ["ZONES", "Pass zones"]], pos, "Position")}</div>
     <div class="tablebox"><table class="data"><thead><tr><th class="t">Defense</th><th class="t">Faces</th>${cols.map((c) => `<th${c === sort ? ' aria-sort="descending"' : ""}><button data-set="dsort" data-val="${c}">${COL_LABEL[c]}</button></th>`).join("")}</tr></thead><tbody>
     ${rows.map((d) => `<tr><td class="t who">${esc(d.team)} <span class="count">${d.games}g</span></td><td class="t">${opp[d.team] ? esc(opp[d.team]) : '<span class="count">bye</span>'}</td>${cols.map((c) => d[c] ? `<td>${c === "tshare" ? pct(d[c][0]) : num(d[c][0])} <span class="${rankClass(d[c][2]) || "count"}">${ord(d[c][2])}</span></td>` : "<td>–</td>").join("")}</tr>`).join("")}
     </tbody></table></div>
@@ -633,6 +675,7 @@ function viewBacktest() {
       <li><b>Defense vs. position.</b> It helped a little on held-out games for rushing yards, rush attempts, passing yards and completions, so those models use it. For receiving yards, receptions, rush + rec yards and passing TDs it added nothing or made things worse, so those show it as context only.</li>
       <li><b>Teammates out.</b> In past games, "out" meant a regular who didn't take a snap. On the board it means a player ESPN lists as Out, Doubtful, IR or suspended. The two mostly line up, but a surprise inactive on game day isn't caught. Share trend (last 3 games vs. season) and red zone touches didn't improve yardage predictions, so they're shown as context only.</li>
       <li><b>Near misses.</b> Anytime TD cards show red zone targets and carries separately, and how often a run or catch ended inside the 5 or the 20 without scoring. Tested as inputs to the TD chance, none of them changed its accuracy on held-out seasons: the red zone and inside-10 touches already in the model carry the same information. They're shown as context only.</li>
+      <li><b>Pass zones.</b> Every target is placed in a zone by how far past the line the ball was thrown and to which side. Cards (in Full detail) and Matchups show where each player is thrown to and what this week's defense allows per target there; "zone fit" is how many more (or fewer) yards per target than league average that defense allows across the player's zones. Tested as an input, it didn't improve receiving yards, receptions, rush + rec, longest catch or anytime TD on held-out seasons, and neither did the share of deep targets, so it's context only. The figures come from where the ball was thrown, not the route run: route data isn't published until after the season.</li>
       <li><b>Hit history.</b> "Cleared in 6 of 8" is the player's own record this season. It's context, not a forecast: small samples swing a lot, and the chance this week already accounts for the player's averages.</li>
       <li><b>Not betting value.</b> These are likely outcomes, not prices. An 85% play can still be a bad bet at the posted odds.</li>
     </ul>

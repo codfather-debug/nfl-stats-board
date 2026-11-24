@@ -206,7 +206,8 @@ def ruled_out(pg, up, week):
 
 # Shown on the page but not model inputs (or inputs some models skip).
 SHOWN = ["gp", "prev_gp", "missed", "snap_g", "snap_l3", "snap_last", "targets_sh", "targets_sh3", "carries_sh", "carries_sh3", "rz_opp_g", "i10_opp_g",
-         "rz_opp_sh", "vac_carries", "vac_targets", "rz_tgt_g", "rz_car_g", "near5_g", "near20_g"]
+         "rz_opp_sh", "vac_carries", "vac_targets", "rz_tgt_g", "rz_car_g", "near5_g", "near20_g",
+         "zone_edge", *("zsh_" + z for z in F.ZONES)]
 # Each player's game log, for hit history. Keep in step with LOG in template.html.
 LOG = ["week", "opp", "home", "indoor", "turf", "snap", "carries", "rushing_yards", "long_rush", "targets", "receptions", "receiving_yards",
        "long_rec", "rr_tds", "rz_opp", "completions", "attempts", "passing_yards", "passing_tds"]
@@ -281,6 +282,17 @@ def defenses(pg, week):
             row["tshare"] = [round(float(tshare[(d, p)]), 3), round(float(league[p]), 3), int(trank[(d, p)])]
         out.append(row)
     return out
+
+
+def zones(pg, week):
+    """Yards per target each defense allowed in each pass zone before this week: {zone: [ypt, targets, rank]}."""
+    t = F.zone_table(pg, SEASON, week)
+    out = []
+    for r in t.to_dict("records"):
+        z = {k: [round(float(r[k]), 1), int(r[k + "_n"]), int(r[k + "_rank"])] for k in F.ZONES if r[k] == r[k]}
+        out.append({"team": r["defense"], "z": z})
+    league = {k: round(float(t[k + "_lg"].iloc[0]), 1) for k in F.ZONES} if len(t) else {}
+    return out, league
 
 
 def write_atomic(path, text):
@@ -369,6 +381,7 @@ def main(src):
         print(f"Anytime TD: {covered} of {sum('td|1' in p['plays'] for p in players)} players use the TD Board's chance")
         data["slate"], data["players"] = games_week, players
         data["defenses"] = defenses(pg[pg.season == SEASON], week)
+        data["zones"], data["zoneLg"] = zones(pg[pg.season == SEASON], week)
         data["logCols"] = LOG
         if data["injuriesAt"]:
             snapshot(history, players, slate_by_team, week, now)
