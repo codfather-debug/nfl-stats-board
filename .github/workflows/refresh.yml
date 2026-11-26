@@ -10,6 +10,11 @@ on:
     - cron: "30 19 * * 0"  # Before the late afternoon games.
     - cron: "0 22 * * 0,1,4,6"  # Before Sunday, Monday, Thursday and Saturday night games.
   workflow_dispatch:
+    inputs:
+      discord_test:
+        description: "Also send a test post to Discord"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -43,3 +48,12 @@ jobs:
             git pull --rebase
             git push
           fi
+      - name: Post to Discord
+        # After publishing, so only what went live is posted. A Discord problem never fails the refresh.
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_TEST: ${{ inputs.discord_test }}
+        run: |
+          if [ "$DISCORD_TEST" = "true" ]; then python discord_post.py --test; fi
+          python discord_post.py --since "$GITHUB_SHA"
